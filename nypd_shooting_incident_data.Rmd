@@ -1,0 +1,530 @@
+---
+title: "NYPD Shootings"
+author: ''
+date: '`r Sys.time()`'
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, echo=FALSE, error=FALSE, message=FALSE, warning=FALSE, comment=NA}
+library(knitr)
+knitr::opts_chunk$set(
+    comment=NA, 
+    message=FALSE, 
+    echo=TRUE, 
+    warning=FALSE, 
+    error=FALSE, 
+    fig.path = "img/", 
+    fig.align='center'
+)
+options(width=80)
+```
+
+Library notice: please make sure you install the following packages before knitting this Rmd. Note that splines does not come with tidyverse.
+
+```{r libraries, message=FALSE}
+library(tidyverse)
+library(lubridate)
+library(splines)
+library(modelr)
+```
+
+## Import and Describe Dataset
+
+```{r data, message=FALSE}
+nypd <- read_csv("https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv?accessType=DOWNLOAD")
+```
+
+Welcome to the historical NYPD shooting dataset. It tracks each NYPD shooting incident going back to 2006, excluding the current calendar year, though the data only goes until 31 December 2021 as of 4 April 2023, so it is missing 2022 data.
+
+The data includes dates and times of shootings as well as different descriptions of location for each incident. It also includes a few pieces of demographic info about the perpetrators and victims of each shooting.
+
+We'll explore two different pieces of info in this dataset: relative fatality of shootings in different boroughs and distribution of shootings based on month and hour of the day.
+
+## Tidy and Transform
+
+We'll trim down the analysis dataset to include the fields we need for our specific analysis while keeping a few extra fields that we can use for follow-up questions.
+
+```{r initial_summary}
+str(nypd)
+```
+
+We'll start by cleaning up the data types that read_csv() guessed so that they align more closely with the data dictionary. Fortunately, the parsing didn't result in any parsing problems.
+
+First we'll map out factor levels based on the data dictionary and using some judgment calls on what's in the data.
+
+```{r set_factor_levels}
+
+boro_levels <- c(
+    "BRONX",
+    "BROOKLYN",
+    "MANHATTAN",
+    "QUEENS",
+    "STATEN ISLAND"
+)
+
+jurisdiction_code_levels <- c(
+    "Patrol",
+    "Transit",
+    "Housing"
+)
+
+location_desc_levels <- c(
+    "ATM",
+    "BANK",
+    "BAR/NIGHT CLUB",
+    "BEAUTY/NAIL SALON",
+    "CANDY STORE",
+    "CHAIN STORE",
+    "CHECK CASH",
+    "CLOTHING BOUTIQUE",
+    "COMMERCIAL BLDG",
+    "DEPT STORE",
+    "DOCTOR/DENTIST",
+    "DRUG STORE",
+    "DRY CLEANER/LAUNDRY",
+    "FACTORY/WAREHOUSE",
+    "FAST FOOD",
+    "GAS STATION",
+    "GROCERY/BODEGA",
+    "GYM/FITNESS FACILITY",
+    "HOSPITAL",
+    "HOTEL/MOTEL",
+    "JEWELRY STORE",
+    "LIQUOR STORE",
+    "LOAN COMPANY",
+    "MULTI DWELL - APT BUILD",
+    "MULTI DWELL - PUBLIC HOUS",
+    "NONE",
+    "PHOTO/COPY STORE",
+    "PVT HOUSE",
+    "RESTAURANT/DINER",
+    "SCHOOL",
+    "SHOE STORE",
+    "SMALL MERCHANT",
+    "SOCIAL CLUB/POLICY LOCATI",
+    "STORAGE FACILITY",
+    "STORE UNCLASSIFIED",
+    "SUPERMARKET",
+    "TELECOMM. STORE",
+    "VARIETY STORE",
+    "VIDEO STORE"  
+)
+
+# PERP_AGE_GROUP has three levels we're excluding here because we'll group
+# them in with UNKNOWN
+age_group_levels <- c(
+    "<18",
+    "18-24",
+    "25-44",
+    "45-64",
+    "65+",
+    "UNKNOWN"
+)
+
+sex_levels <- c(
+    "M",
+    "F",
+    "U"
+)
+
+race_levels <- c(
+    "BLACK",
+    "ASIAN / PACIFIC ISLANDER",
+    "BLACK HISPANIC",
+    "WHITE HISPANIC",
+    "WHITE",
+    "AMERICAN INDIAN/ALASKAN NATIVE",
+    "UNKNOWN"
+)
+
+```
+
+We need to clean up JURISDICTION_CODE before we can set it as a factor type. The data dictionary says that JURISDICTION_CODE has categorical values, so we'll map the numeric values to the matching character values and then convert over to factors. We can reuse jurisdiction_code_levels for this step and later when converting to factors.
+
+```{r tidy_jurisdiction_values}
+nypd_clean <- nypd %>% 
+    mutate(JURISDICTION_CODE = jurisdiction_code_levels[JURISDICTION_CODE + 1])
+```
+
+We'll also handle NAs before converting fields to factors. Here's a summary of which fields have NAs.
+
+```{r na_check}
+sapply(
+    nypd_clean, 
+    function(col) sum(is.na(col))
+)
+```
+
+We'll drop the two NA rows for JURISDICTION_CODE since that field doesn't have a category that indicates none or unknown. Two records in this dataset are only a fraction of a percent of the total.
+
+Three values for PERP_AGE_GROUP look like typos: 1020, 224, and 940. They each have one record. We'll group those into UNKNOWN assuming they are typos. The remaining categories for this field match the categories for VIC_AGE_GROUP.
+
+For the remaining NAs, we'll change those over to the none or unknown category that's already in each field. I don't see a reason to leave the distinction between NA and a category indicating none or unknown since each incident has a location, each perpetrator has a gender, etc.
+
+```{r tidy_handle_nas}
+
+# row counts in the comments are for the dataset that covers years 2006 through 2021
+nypd_clean %<>% 
+    filter(!is.na(JURISDICTION_CODE)) %>% 
+    mutate(
+        # 14976 NA (one of these NAs gets dropped with JURISDICTION_CODE)
+        # 175 NONE
+        # 15,151 combined
+        LOCATION_DESC = ifelse(
+            is.na(LOCATION_DESC), 
+            "NONE", 
+            LOCATION_DESC
+        ),
+        
+        # 9347 NA
+        # 3147 UNKNOWN (one gets dropped with JURISDICTION_CODE)
+        # 12,494 combined
+        PERP_AGE_GROUP = ifelse(
+            is.na(PERP_AGE_GROUP) | PERP_AGE_GROUP %in% c("1020", "224", "940"), 
+            "UNKNOWN", 
+            PERP_AGE_GROUP
+        ),
+        
+        # 9310 NA
+        # 1499 U
+        # 10,809 combined
+        PERP_SEX = ifelse(
+            is.na(PERP_SEX), 
+            "U", 
+            PERP_SEX
+        ),
+        
+        # 9310 NA
+        # 1836 UNKNOWN
+        # 11,146 combined
+        PERP_RACE = ifelse(
+            is.na(PERP_RACE), 
+            "UNKNOWN", 
+            PERP_RACE
+        )
+    )
+```
+
+With NAs cleaned up, we can handle field types. We'll convert OCCUR_DATE to a date type field and apply factors to categorical fields. We'll also drop a couple of fields that we don't need for our analysis.
+
+```{r tidy_fix_columns_and_types}
+nypd_clean %<>% 
+    select(-c(
+        "INCIDENT_KEY",
+        "X_COORD_CD",
+        "Y_COORD_CD",
+        "Lon_Lat"
+    )) %>%
+    mutate(
+        OCCUR_DATE = parse_date(
+            OCCUR_DATE,
+            format = "%m/%d/%Y"
+        ),
+        BORO = parse_factor(
+            BORO, 
+            levels = boro_levels
+        ),
+        JURISDICTION_CODE = parse_factor(
+            JURISDICTION_CODE, 
+            levels = jurisdiction_code_levels
+        ),
+        LOCATION_DESC = parse_factor(
+            LOCATION_DESC,
+            levels = location_desc_levels
+        ),
+        PERP_AGE_GROUP = parse_factor(
+            PERP_AGE_GROUP, 
+            levels = age_group_levels, 
+            ordered = TRUE
+        ),
+        PERP_SEX = parse_factor(
+            PERP_SEX, 
+            levels = sex_levels
+        ),
+        PERP_RACE = parse_factor(
+            PERP_RACE, 
+            levels = race_levels
+        ),
+        VIC_AGE_GROUP = parse_factor(
+            VIC_AGE_GROUP, 
+            levels = age_group_levels, 
+            ordered = TRUE
+        ),
+        VIC_SEX = parse_factor(
+            VIC_SEX, 
+            levels = sex_levels
+        ),
+        VIC_RACE = parse_factor(
+            VIC_RACE, 
+            levels = race_levels
+        )
+    )
+```
+
+We can drop factor level variables to clean up our environment some. Normally I'd exclude the following type of chunk from the knitted output, but I'll keep it in for the assignment.
+
+```{r tidy_clean_up}
+rm(age_group_levels)
+rm(boro_levels)
+rm(jurisdiction_code_levels)
+rm(location_desc_levels)
+rm(race_levels)
+rm(sex_levels)
+```
+
+## Shooting Fatality
+
+The first question looks at the relationship of fatal to non-fatal shootings in each borough. If we find distinctions here, we may be able to look at other characteristics of each borough that could lead to differences in fatality rates.
+
+First, a general sense of the total shootings per borough we're working with.
+
+```{r fatality_count_per_borough}
+nypd_clean %>% 
+    ggplot(aes(x = BORO)) +
+    geom_bar(aes(fill = STATISTICAL_MURDER_FLAG)) +
+    labs(
+        x = "Borough", 
+        y = "Total number of shootings", 
+        title = "NYC Shootings 2006 - 2021 (counts)"
+    ) +
+    coord_cartesian(expand = FALSE) +
+    theme_bw() +
+    theme(
+        axis.text.x = element_text(angle = 45, hjust = 1),
+        plot.title = element_text(hjust = 0.5)
+    )  +
+    scale_fill_discrete(
+        name = "Fatal", 
+        labels = c("No", "Yes")
+    )
+```
+
+For this analysis, I'm going to zero in on the fatality rates, but, if we wanted to drill down into total counts further, I'd start by grabbing general population info per borough. I'm curious about stats like shootings per capita to see if any boroughs are safer or more dangerous in terms of shooting rates. I'd also be interested to see how some of the demographic info in this dataset lines up with demographics for the overall populations in each borough. As a final item, it'd be helpful to break these down further by year so we can start to look at yearly trends and potentially move into predictive modeling.
+
+But, for now, let's pivot to fatality rates. It's hard to tell if shootings are more or less fatal compared to the total shootings per borough based on the graph above. We can make this easier by extending each bar to fill the entire vertical space.
+
+```{r fatality_percent_per_borough}
+nypd_clean %>% 
+    ggplot(aes(x = BORO)) +
+    geom_bar(
+        aes(fill = STATISTICAL_MURDER_FLAG), 
+        position = "fill"
+    ) +
+    labs(
+        x = "Borough",
+        y = "Percentage of shootings",
+        title = "NYC Shootings 2006 - 2021 (percentage)"
+    ) +
+    coord_cartesian(expand = FALSE) +
+    theme_bw() +
+    theme(
+        axis.text.x = element_text(angle = 45, hjust = 1),
+        plot.title = element_text(hjust = 0.5)
+    ) +
+    scale_fill_discrete(
+        name = "Fatal", 
+        labels = c("No", "Yes")
+    ) +
+    scale_y_continuous(
+        labels = scales::percent,
+        breaks = c(0, .2, .4, .6, .8, 1)
+        )
+```
+
+A quick visual scan shows that all five boroughs have a fatality rate right around 20%. We can confirm this in more detail by looking at the fatality rates in numeric form.
+
+```{r fatality_percent_table}
+nypd_clean %>% 
+    group_by(BORO) %>% 
+    summarize(
+        fatal_count = sum(STATISTICAL_MURDER_FLAG == TRUE),
+        total_count = n(),
+        percent = scales::percent(sum(STATISTICAL_MURDER_FLAG == TRUE) / total_count, accuracy = 0.01)
+    ) %>% 
+    arrange(BORO) %>% 
+    kable(
+        col.names = c("Borough", "Fatal Count", "Total Count", "Percent Fatal"),
+        align = "lrrr"
+    )
+```
+
+My naive guess was that we'd see a bigger spread of fatality rates between the boroughs. The first question that comes to mind is to check and see if fatality rates in general throughout the country sit around 20%. If they don't, what are some of the factors that differentiate the different rates. Also, I'm considering a range from 17.5% to a little over 21% as close enough to 20% to group them together, but shooting fatality rates may be sensitive enough that a couple percentage points indicate more than I realize here and shouldn't be grouped together.
+
+Similar to for the previous chart, I'd want to see shooting fatality rates for other locations as well as looking at some of the demographic information in the shooting dataset. I'd also want to see these trends faceted out by year as well.
+
+There are a couple of extra analyses I'd want to look into. I figure statistics like proximity to emergency medical services and response times after a shooting would affect fatality statistics, so I'd want to start using the geographic information in the shooting dataset and compare position with those of hospitals, as one example.
+
+For now, it's interesting that the fatality rates are within a few percentage points of each other. We're nowhere near stating meaning based on that, but we do have some next steps to get us closer to some possible correlations.
+
+### Shooting Frequency
+
+Next we'll take a look at shooting frequency based on different measures of time, starting with how shooting counts look based on the month.
+
+```{r shootings_per_month}
+nypd_clean %>% 
+    mutate(month = month(OCCUR_DATE, label = TRUE)) %>% 
+    group_by(month) %>% 
+    summarize(n = n()) %>% 
+    arrange(month) %>%
+    
+    ggplot(aes(x = month, y = n)) +
+    geom_bar(
+        stat = "identity", 
+        fill = "navy", 
+        color = "navy", 
+        width = 0.8
+    ) +
+    coord_cartesian(expand = FALSE) +
+    labs(
+        title = "NYC Shootings Per Month",
+        x = NULL,
+        y = "Number of Shootings"
+    ) +
+    theme_bw() +
+    theme(
+        plot.title = element_text(hjust = 0.5)
+    )
+```
+
+This visualization shows the total number of shootings per month. My naive guess would be that shootings would be higher in the summer and lower in the winter due to people being out and about more during the longer days of the summer. The graph does hint at that trend, but there hasn't been any work here to establish further meaning behind the trend. One next step we could do is to drill down into each bar based on the location data already in the dataset. We may find that certain locations show up more in the summer, and we could look for supplementary information to see if those locations or activities that happen in them are more common in the summer.
+
+A couple of other follow-up analyses come to mind. First is to check each bar above broken out by time of day. I'm curious if we'd see shootings later in the day during summer when it's still light out but not in the winter when it's already dark. We could also see if there are more indoor shootings in the winter and outdoor shootings in the summer.
+
+Similar to the previous charts, I'd also like to see breakdowns by other demographics in the dataset. One particular measure I'm curious about is age. It's not comfortable to think about, but I'm curious if school cycles correlate at all with different aspects of shootings, either for students themselves or even for parents.
+
+Speaking of looking at time of day, I want to see a similar chart to the previous one but broken out by time of day. Here I'm curious about which hours during the day have the most shootings. 
+
+```{r shootings_per_hour_of_day_without_models}
+nypd_clean %>% 
+    mutate(hour = hour(OCCUR_TIME)) %>% 
+    group_by(hour) %>% 
+    summarize(n = n()) %>% 
+
+    ggplot(aes(x = hour, y = n)) +
+    geom_bar(
+        stat = "identity", 
+        fill = "navy", 
+        color = "navy", 
+        width = 0.8
+    ) +
+    coord_cartesian(expand = FALSE) +
+    labs(
+        title = "NYC Shootings Per Hour of the Day",
+        x = "Hour of the Day (24 hour)",
+        y = "Number of Shootings"
+    ) +
+    theme_bw() +
+    theme(plot.title = element_text(hjust = 0.5))
+```
+
+We can see a parabolic-ish shape to this data. We'll add linear models of degrees one through nine plotted on top of the time breakdown to see how the curves approximate the data.
+
+```{r shootings_per_hour_of_day_with_models}
+ds_model <- nypd_clean %>% 
+    mutate(hour = hour(OCCUR_TIME)) %>% 
+    group_by(hour) %>% 
+    summarize(n = n())
+
+degree_1 <- lm(n ~ ns(hour, 1), ds_model)
+degree_2 <- lm(n ~ ns(hour, 2), ds_model)
+degree_3 <- lm(n ~ ns(hour, 3), ds_model)
+degree_4 <- lm(n ~ ns(hour, 4), ds_model)
+degree_5 <- lm(n ~ ns(hour, 5), ds_model)
+degree_6 <- lm(n ~ ns(hour, 6), ds_model)
+degree_7 <- lm(n ~ ns(hour, 7), ds_model)
+degree_8 <- lm(n ~ ns(hour, 8), ds_model)
+degree_9 <- lm(n ~ ns(hour, 9), ds_model)
+
+preds <- ds_model %>% 
+    gather_predictions(
+        degree_1,
+        degree_2,
+        degree_3,
+        degree_4,
+        degree_5,
+        degree_6,
+        degree_7,
+        degree_8,
+        degree_9
+    )
+
+ds_model %>% 
+    ggplot(aes(x = hour)) +
+    geom_bar(
+        aes(y = n), 
+        stat = "identity", 
+        fill = "navy", 
+        color = "navy", 
+        width = 0.8
+    ) +
+    geom_line(
+        data = preds, 
+        aes(y = pred), 
+        color = "red"
+    ) +
+    facet_wrap(~ model) +
+    coord_cartesian(expand = FALSE) +
+    labs(
+        title = "NYC Shootings Per Hour of the Day",
+        x = "Hour of the Day (24 hour)",
+        y = "Number of Shootings"
+    ) +
+    theme_bw() +
+    theme(plot.title = element_text(hjust = 0.5))
+
+rm(ds_model)
+rm(degree_1)
+rm(degree_2)
+rm(degree_3)
+rm(degree_4)
+rm(degree_5)
+rm(degree_6)
+rm(degree_7)
+rm(degree_8)
+rm(degree_9)
+rm(preds)
+```
+
+We see that the most shootings happen later in the evening and very early in the morning. Those numbers drop off quickly as we get to around 5:00 AM, stay low for a few hours, and then gradually build back up throughout the rest of the day.
+
+Speaking to the counts first, my immediate follow-up is that I'd like to add in the location data from this dataset to see if nighttime activities are correlated with shootings or if there's no real link there.
+
+Like I said in the last graph, I'd like to look at both time of day and month of the year to see if there's a correlation hidden between those two measures.
+
+Moving to the model, a quick scan of the bar graph reveals that the model here isn't linear. It has some sort of parabolic shape. So, the next question is how many degrees we need to capture most of the variation in the data. Looking at the graphs here, degree one is out, and we start to see overfitting with degree five. The bottom of the curve for degree two doesn't quite capture the bottom of the counts for the dataset.
+
+The optimal degree looks like it's three or four. With the amount of data we have here, I can't see much of a difference between the two in terms of the bottom of the curve matching the data as well as the ends of the curve lining up with the first and last bars. I also don't see much in between in terms of matching the different hours. At this point, I'd want to add a lot more data to see if any further distinctions pop out. Since this dataset only adds one more year at a time as that data becomes available, it'd be helpful to look for other datasets, either for shootings in other cities or in larger aggregations.
+
+For now, I like going with a polynomial of degree three to model this data. I find the fact that a non-linear model captures this data better than a linear model more interesting than picking which degree of polynomial is best. One thing to note too is that most of the non-linear change comes from the decrease in shootings early in the morning. The fact that this needs a degree higher than one means each day has both increase and decrease in shootings rather than just an increase or just a decrease.
+
+My next model I'd want to test out is a logistic regression on fatal or non-fatal to try and predict if a shooting will be fatal based on month of year, time of day, location, etc. We could also run another linear model using multiple linear regression in order to incorporate some of the other measures in this dataset.
+
+## Conclusion and Bias Identification
+
+We've seen hints that while the fatality of shootings are similar between all five boroughs, there are a higher amount of shootings in Brooklyn, in the summer months, and late at night and early in the morning. For the first of those, we need to look at overall population data before we can determine that shootings happen at a higher rate in Brooklyn, so we want to be careful with extending beyond what this dataset tells us.
+
+These preliminary findings can help aid policy decisions in terms of focusing on locations and times of higher overall shootings. If we start to look at what happens after a shooting occurs, we may be able to hone in on why the fatality rates are also similar, helping us to lean into policies that may be working and refining those that aren't.
+
+My next analytical interest, staying within this dataset, is to factor in location. Clarity on where shootings occur may help us to make more sense of the trends we found in the analyses above.
+
+One other big follow-up would be to pull in general crime statistics and see where our analysis lines up with or differs from the norm.
+
+I made a few decisions on how to tidy up this data that may reveal some bias in my approach.
+
+I coerced NAs into the none or unknown category for each measure. This is a quick way to handle NAs, but it's unlikely that those all of those NAs are actually unknown. One improvement could be to use other information to predict what the NA should be. For instance, we might be able to say that any shootings that occur between certain hours at night should have age range mapped to a specific value based on domain knowledge from outside of this dataset. The downside of this is that we may end up reinforcing the most common values in the name of simplicity. We could make this more complicated by building out a predictive model that reads in different combinations of measures and outputs an educated guess as to what the NA should be. But this still runs the risk of reinforcing any bias that's already in the dataset.
+
+We also want to check for bias in the collection and reporting of the source dataset. One interesting statistic would be what percentage of shootings aren't included in the official reporting. There may be good reasons for excluding those, but it opens up questions as to bias in terms of more diligent investigation into shootings based on the demographics of those involved in the shooting, as one example. Gathering data can be difficult, especially if you don't gather everything you need at the time of an incident, so I wouldn't be surprised if we found that shootings are more accurately investigated and reported based on race, accent, appearance of income level, and other demographic factors.
+
+As for bias in the analysis itself, one of the big worries with providing a formal analysis is that people focus on what you present and de-emphasize what you don't include. I picked questions that are a mix of initial interest with trends I saw when doing exploratory analysis. My questions don't focus on race or age or gender at all, and it could turn out that the most important information in this dataset has to do with one of those demographic measures. By excluding race, age, and gender from my analysis, it's fair to say that it downplays those in favor of focusing on overall fatality rates or overall shooting counts. Before sending an analysis along to inform decisions, I'd want to include several rounds of exploratory analysis and preliminary results looking at the other measures not in this analysis. Further, I'd want to do some research around shooting data in general to understand what types of bias are common with this type of data and make sure to account for those.
+
+Another key aspect of this dataset that I'm not sure the best way to handle for my analysis is focusing on perpetrator vs victim. Both sets of information are valuable, but I'd want to be sure to match the analysis to the audience. If the audience is broader and more general, I'd want to be careful about focusing too much on perpetrators and not enough on victims. We don't want to lose sight of the individual victims by pushing them to the background. If the audience is more specialized, I might want to pivot more into looking at perpetrators. But, just because there are trends among perpetrator info, we'd want to be careful about losing complexity in what leads up to someone being a perpetrator. I don't have a great answer for this issue. I think it's a case-by-case basis in terms of which angle you use for which audience, and you do your best to qualify what your analysis is saying and not let that make definitive statements that go beyond the data.
+
+To summarize this down for this specific analysis, I focused on fatality rates related to victims and not on some of the deeper demographic data. I also didn't zoom in on outliers, and the outliers may tell us a lot about the data we're working with.
+
+Thanks for reading! I had fun on this assignment and look forward to your feedback.
+
+```{r session_info}
+sessionInfo()
+```
