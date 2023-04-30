@@ -1,0 +1,842 @@
+---
+title: "COVID-19"
+author: ''
+date: "`r Sys.time()`"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, echo=FALSE, error=FALSE, message=FALSE, warning=FALSE, comment=NA}
+library(knitr)
+knitr::opts_chunk$set(
+    comment=NA, 
+    message=FALSE, 
+    echo=TRUE, 
+    warning=FALSE, 
+    error=FALSE, 
+    fig.path = "img/", 
+    fig.align='center'
+)
+options(width=80)
+```
+
+```{r libraries, message=FALSE}
+library(tidyverse)
+```
+
+## Intro
+
+Welcome to the Johns Hopkins COVID-19 datasets. We're going to look at the Center for Systems Science and Engineering time series data. My analysis will focus on global data, but you can uncomment the us_cases and us_deaths lines in the 'data' code chunk just below if you want to see US-specific data.
+
+Three of the datasets provide global counts of cases, deaths, and recoveries. These time series datasets have one row per country/region/province/state for the dates between 22 January 2020 through 9 March 2023 with cumulative counts, not daily counts. We'll need to tidy these up into a format that's friendlier for reporting.
+
+The fourth dataset provides population numbers, among other identifying measures. We'll join this to our reporting dataset to pull in population numbers.
+
+The analysis here will center on correlations between population and cases. We do see that total cases correlate to some degree with size of population. For this analysis, I want to do some exploration of the relationship between those two measures. In a future iteration of this analysis, I'd want to try and account for differences in overall population to try and find a more apples-to-apples comparison for cases between countries. I'll start that a little bit here by showing percentage of cases compared to population as a start down that path, but we'd need something more complex than straight percent to do future analyses.
+
+```{r data, message=FALSE}
+url <- "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data//"
+files <- c(
+    "csse_covid_19_time_series/time_series_covid19_confirmed_US.csv",
+    "csse_covid_19_time_series/time_series_covid19_confirmed_global.csv",
+    "csse_covid_19_time_series/time_series_covid19_deaths_US.csv",
+    "csse_covid_19_time_series/time_series_covid19_deaths_global.csv",
+    "csse_covid_19_time_series/time_series_covid19_recovered_global.csv",
+    "UID_ISO_FIPS_LookUp_Table.csv"
+)
+urls <- str_c(url, files)
+
+# us_cases = read_csv(urls[1])
+global_cases = read_csv(urls[2])
+# us_deaths = read_csv(urls[3])
+global_deaths = read_csv(urls[4])
+global_recovered = read_csv(urls[5])
+global_population = read_csv(urls[6])
+
+rm(url)
+rm(files)
+rm(urls)
+```
+
+## Tidy
+
+First we'll check for NAs so we can clean those up.
+
+For the three datasets with COVID numbers, we're going to drop Lat and Long, so we won't worry about those fields. For Province/State, we're uniting that column with Country/Region and removing NAs prior to that uniting.
+
+For the population dataset, we aren't using any of the three fields with NAs, so we're set there.
+
+All to say that we'll handle NAs while tidying up our reporting dataset.
+
+```{r check_for_nas}
+colnames(global_cases)[sapply(global_cases, function(col) anyNA(col))]
+colnames(global_deaths)[sapply(global_cases, function(col) anyNA(col))]
+colnames(global_recovered)[sapply(global_cases, function(col) anyNA(col))]
+colnames(global_population)[sapply(global_cases, function(col) anyNA(col))]
+```
+
+One decision point is how we want to uniquely identify a country or province or such. I did a preliminary check on the global_population dataset. My initial assumption was that the Country/Region row that has NA for Province/State would be a total population for that Country/Region as a whole and that adding up all the different rows with Province/State values for that Country/Region would give a matching total.
+
+Turns out this isn't the case, as you can see in this code chunk where the population for the row for Brazil with NA for Province/State does not equal the sum of the remaining rows for Brazil.
+
+```{r population_mismatch}
+global_population %>% 
+    filter(
+        Country_Region == "Brazil",
+        is.na(Province_State)
+    ) %>% 
+    select(Population) - 
+
+global_population %>% 
+    filter(
+        Country_Region == "Brazil",
+        !is.na(Province_State)
+    ) %>% 
+    select(Population) %>% 
+    sum(na.rm = TRUE)
+```
+
+At this point, I decided to create a combined_key field. There may be a way to isolate reliable Country/Region values that don't need Province/State values, but I couldn't find one in a reasonable time, so I decided to combine the two matching fields from the COVID count datasets so we can use that to join against the population dataset later.
+
+Now to the tidying. The general strategy for cleaning up the COVID datasets in the next three chunks is to get one row per combined_key per date and then join the three sets of counts together in the following chunk.
+
+```{r tidy_global_cases}
+tidy_global_cases <- global_cases %>% 
+    select(
+        -c(
+            Lat,
+            Long
+        )
+    ) %>% 
+    unite(
+        combined_key,
+        `Province/State`,
+        `Country/Region`,
+        sep = ", ",
+        na.rm = TRUE,
+        remove = TRUE
+    ) %>% 
+    pivot_longer(
+        cols = `1/22/20`:`3/9/23`,
+        names_to = "date",
+        values_to = "cases"
+    ) %>% 
+    mutate(
+        date = parse_date(
+            date,
+            format = "%m/%d/%y"
+        ),
+    ) %>% 
+    group_by(
+        combined_key,
+        date
+    ) %>% 
+    summarize(
+        cases = sum(cases)
+        , .groups = "keep"
+    )
+```
+
+```{r tidy_global_deaths}
+tidy_global_deaths <- global_deaths %>% 
+    select(
+        -c(
+            Lat,
+            Long
+        )
+    ) %>% 
+    unite(
+        combined_key,
+        `Province/State`,
+        `Country/Region`,
+        sep = ", ",
+        na.rm = TRUE,
+        remove = TRUE
+    ) %>% 
+    pivot_longer(
+        cols = `1/22/20`:`3/9/23`,
+        names_to = "date",
+        values_to = "deaths"
+    ) %>% 
+    mutate(
+        date = parse_date(
+            date,
+            format = "%m/%d/%y"
+        ),
+    ) %>% 
+    group_by(
+        combined_key,
+        date
+    ) %>% 
+    summarize(
+        deaths = sum(deaths)
+        , .groups = "keep"
+    )
+```
+
+```{r tidy_global_recovered}
+tidy_global_recovered <- global_recovered %>% 
+    select(
+        -c(
+            Lat,
+            Long
+        )
+    ) %>% 
+    unite(
+        combined_key,
+        `Province/State`,
+        `Country/Region`,
+        sep = ", ",
+        na.rm = TRUE,
+        remove = TRUE
+    ) %>% 
+    pivot_longer(
+        cols = `1/22/20`:`3/9/23`,
+        names_to = "date",
+        values_to = "recovered"
+    ) %>% 
+    mutate(
+        date = parse_date(
+            date,
+            format = "%m/%d/%y"
+        ),
+    ) %>% 
+    group_by(
+        combined_key,
+        date
+    ) %>% 
+    summarize(
+        recovered = sum(recovered)
+        , .groups = "keep"
+    )
+```
+
+```{r combine_counts}
+global_clean <- tidy_global_cases %>% 
+    full_join(
+        tidy_global_deaths,
+        by = c(
+            "combined_key",
+            "date"
+        )
+    ) %>% 
+    full_join(
+        tidy_global_recovered,
+        by = c(
+            "combined_key",
+            "date"
+        )
+    ) %>% 
+    
+    # We need to ungroup before running the lag() functions for daily counts
+    # in the next code chunk
+    ungroup() %>% 
+    arrange(
+        combined_key,
+        date
+    )
+
+rm(tidy_global_cases)
+rm(tidy_global_deaths)
+rm(tidy_global_recovered)
+```
+
+Since the time series datasets are cumulative, we'll calculate new daily cases, deaths, and recovered to give us daily info as well.
+
+```{r add_daily_counts}
+global_clean %<>% 
+    group_by(combined_key) %>% 
+    mutate(
+        new_cases = cases - lag(cases, order_by = date),
+        new_deaths = deaths - lag(deaths, order_by = date),
+        new_recovered = recovered - lag(recovered, order_by = date)
+    ) %>% 
+    
+    # Similar to note in last code chunk
+    ungroup %>% 
+    arrange(
+        combined_key, 
+        date
+    )
+```
+
+Finally we'll add in population data.
+
+Above I explained my thought process on creating a combined_key in the COVID datasets so that we can do the join in the next code chunk. I think this is fine for this pass of analysis, but this is a decision I'd return to for future iterations.
+
+I'd want to do some more research on where the population numbers are coming from. The population dataset only has one row per combined_key, and then we're joining that one value against the entire time range for the COVID numbers. It'd be nice to find a way to break population out into smaller time chunks that reflect changes in population throughout the pandemic.
+
+We also have some disconnects between combined_key values. There are some values that exist in only one side of the join. We're doing a full join to keep all of the data on both sides of the join, but I'd want to spend some more time here on future iterations to determine if there's extra clean up we could do on combined_key values. This would give us more accuracy in the reporting dataset.
+
+There are also some categories that we'd want to remove. For example, there are rows for the Olympics and for cruises. If we're focusing on countries, then we'd want to clean up non-country rows.
+
+```{r add_population}
+global_clean %<>%
+full_join(
+        global_population,
+        by = c("combined_key" = "Combined_Key")
+    ) %>% 
+    select(-c(UID:Long_)) %>% 
+    rename(population = Population)
+```
+
+At this point, we have a base reporting dataset that has one row per combined_key, includes population, and has both counts and percentages for cases, deaths, and recovered. We'll build on top of this for the upcoming analysis and visualization.
+
+## Interesting Visualizations
+
+As I said in the opening, I want to start exploring the relationship of population and cases. One issue we'll run into is that larger populations generally mean larger COVID counts regardless of rates. If a country only has 200,00 people in it, and if we assume people can only catch COVID once, then its max case count is 200,000. It doesn't have the option to reach a case count of 500,000 like a larger country. In this case, comparing these two countries isn't as straightforward as seeing with one has higher case counts.
+
+We can look for some sort of way to look at relative case counts. I'll go with percentages here, though we'd want something more nuanced than that for future iterations of analysis. But, for now, this at least lets us get a sense of one rate of cases.
+
+A few notes before we start:
+
+- I'm including death counts and percentages in the plots. I originally analyzed deaths as well. I decided to focus on cases alone to keep this analysis shorter, but there are lots of interesting questions that come up when incorporating death counts and rates as well.
+
+- We'll focus here on the rows with no Province/State values. We need to start either with just these rows or by combining all the rows for a given Country/Region. 
+
+- China only has cases, deaths, and recovered broken down by Province/State. The COVID datasets don't have a generic total China entry. This conflicts with the decision below to run '!str_detect(combined_key, ",")' to look at total country rows instead of those broken down by Province/State. This is admittedly a big issue when looking at countries by population. The way around this would be to decide how to reduce the different Province/State values together when present by ignore the total row for that country with NA for Province/State. I made the call to remove China for this pass, but the next iteration of analysis would cover the type of research and complexity needed for cleaning up a better reporting dataset. For now, just note that China doesn't show up below despite being the largest country by population.
+
+- To reiterate from the last point, we are only looking at the overall rows for a Country/Region, the rows that don't have Province/State values. This is fine for a first pass of analysis, but we need to handle this before we move into drawing conclusions.
+
+- The max_ fields include the maximum count over the dates in the COVID datasets. Since the source data has cumulative counts, this means we're grabbing the latest date to get the total count over that timespan. We calculated new daily values with the lag() functions earlier. But, keep in mind that we're talking about the final total count for the underlying timespan when we use max_ in the visualizations.
+
+- The first trio of visualizations will look at the max_ fields while the graphs in the following section where I introduce the linear models will look at new daily cases.
+
+Let's combine the data down into the one row per Country/Region.
+
+```{r per_country}
+per_country <- global_clean %>%
+    group_by(combined_key) %>% 
+    filter(
+        !str_detect(combined_key, ","),
+        combined_key != "China"
+    ) %>%
+    summarize(
+        max_cases = max(cases),
+        max_deaths = max(deaths),
+        max_recovered = max(recovered),
+        pop = max(population),
+        max_cases_percent = round(max_cases / pop * 100, digits = 2),
+        max_deaths_percent = round(max_deaths / pop * 100, digits = 2),
+        max_recovered_percent = round(max_recovered / pop * 100, digits = 2)
+    )
+```
+
+You can use the following utility chunk to explore the per_country dataset. A couple of useful pieces are to change the number for n to see more or less countries combined, change the order_by value to get a different ordering, and change slice_max() to slice_min() to see the bottom instead of top n values.
+
+```{r per_country_top_summary}
+per_country %>% 
+    # slice_max(n = 10, order_by = max_cases)
+    # slice_max(n = 10, order_by = max_deaths)
+    # slice_max(n = 10, order_by = max_recovered)
+    # slice_max(n = 10, order_by = pop)
+    # slice_max(n = 10, order_by = max_cases_percent)
+    # slice_max(n = 10, order_by = max_deaths_percent)
+    slice_max(n = 10, order_by = max_recovered_percent)
+```
+
+Next we'll look at per_country sliced a few different ways.
+
+Note that we're dividing the cases measure by 10 or by an extra value of 10 beyond what we divide the deaths measure by. This is because the counts for the cases measures are so much higher than the counts for the deaths measures that we can't see distinctions between both at the same time. The deaths measures get smooshed down by the x axis. The tradeoff here is that someone could mistakenly think that case and death measures are closer in value or percent than they actually are.
+
+In the next iteration of this analysis, I'd want to play around with some other ways of displaying this info together that does a better job of keeping the original scales while also allowing us to see distinctions.
+
+And, as another reminder, China is not in these graphs.
+
+```{r top_ten_population}
+per_country %>% 
+    slice_max(n = 10, order_by = pop) %>% 
+    arrange(desc(pop)) %>%
+    select(
+        combined_key,
+        pop,
+        max_cases_percent,
+        max_deaths_percent
+    ) %>% 
+    mutate(
+        
+        # Converting this to a factor so the bar chart ordering is by population
+        combined_key = parse_factor(combined_key),
+        
+        # This allows us to use scales::percent to format the Y axis
+        # without multiplying by 100 again in the label.
+        #
+        # Dividing max_cases_percent by an extra 10 puts cases and deaths percents
+        # on a scale where we can see meaningful distinctions in both at the same
+        # time. If we don't divide cases percent by the extra 10, then cases
+        # percent dwarfs deaths percent to a degree that you can't see
+        # distinctions for the deaths percent.
+        max_cases_percent = max_cases_percent / 1000,
+        max_deaths_percent = max_deaths_percent / 100
+    ) %>% 
+    pivot_longer(
+        cols = c(
+            max_cases_percent,
+            max_deaths_percent
+        ),
+        names_to = "measure",
+        values_to = "count"
+    ) %>%
+    
+    ggplot(aes(x = combined_key, y = count, fill = measure)) +
+    geom_bar(
+        stat = "identity",
+        position = "dodge",
+    ) +
+    coord_cartesian(expand = FALSE) +
+    labs(
+        title = "Top Ten Most Populous Countries",
+        x = "Population Ordered Largest to Smallest",
+        y = "Percent Cases (Divided by Ten) and Deaths"
+    ) +
+    theme_bw() +
+    theme(
+        axis.text.x = element_text(angle = 45, hjust = 1),
+        plot.title = element_text(hjust = 0.5)
+    ) +
+    scale_y_continuous(
+        labels = scales::percent
+    ) +
+    scale_fill_discrete(
+        name = "Case and Death Percent",
+        labels = c("Cases / 10", "Deaths")
+    )
+```
+
+Here we're showing the top ten most populous countries in descending order from left to right (minus China). What stands out to me here is that there aren't a ton of patterns that pop out. My initial guess would be that higher population countries would have higher rates overall because having more people increases the spread of a communicable disease.
+
+One area of further confusion is that countries with higher densities of population such as India or Pakistan have much lower rates than countries with lower densities like the US. Now, my understanding of population density is from my general knowledge, so we'd want to pull in actual population density statistics to check that. But I was expecting to see more similar rates here.
+
+I'd want to next add in population density. I'd also like to see a more detailed date breakdown. For instance, do some of these countries do a better job of spreading out infections over time instead of getting hit in a small enough time period that they can't stop the increased spread. And I'd want to find a way to add China in here.
+
+So, what happens if we grab the top ten countries with the highest overall counts of COVID cases?
+
+```{r top_ten_max_cases}
+per_country %>% 
+    slice_max(n = 10, order_by = max_cases) %>% 
+    arrange(desc(max_cases)) %>%
+    select(
+        combined_key,
+        pop,
+        max_cases,
+        max_deaths
+    ) %>% 
+    mutate(
+
+        # Converting this to a factor so the bar chart ordering is by max_cases
+        combined_key = parse_factor(combined_key),
+
+        # This allows us to see distinctions between cases and deaths at the same
+        # time. If we keep cases at their natural amounts, cases dwarf deaths to
+        # a degree that you can't see distinctions in deaths.
+        max_cases = max_cases / 10
+    ) %>%
+    pivot_longer(
+        cols = c(
+            max_cases,
+            max_deaths
+        ),
+        names_to = "measure",
+        values_to = "count"
+    ) %>%
+    
+    ggplot(aes(x = combined_key, y = count, fill = measure)) +
+    geom_bar(
+        stat = "identity",
+        position = "dodge",
+    ) +
+    coord_cartesian(expand = FALSE) +
+    labs(
+        title = "Top Ten Case Counts",
+        x = "Case Count Ordered Largest to Smallest",
+        y = "Cases (Divided by Ten) and Deaths"
+    ) +
+    theme_bw() +
+    theme(
+        axis.text.x = element_text(angle = 45, hjust = 1),
+        plot.title = element_text(hjust = 0.5)
+    ) +
+    scale_y_continuous(
+        labels = scales::comma
+    ) +
+    scale_fill_discrete(
+        name = "Case and Death Counts",
+        labels = c("Cases / 10", "Deaths")
+    )
+```
+
+This graph is another check on my initial hypothesis that higher overall population would mean higher case counts. We do see some countries on this graph and the previous one, countries such as the US, India, Brazil, Japan, and Russia. But they aren't in the same order. And some of the countries from the previous graph for most populous countries aren't on this one.
+
+There's a lot more work to do to determine why we do or don't see the same countries on each of these two graphs. I'd be curious about population density, same as for the last graph. But I'd also want to see about global region. It looks like Europe is more represented on the second graph than the first. And Brazil is the only country from Central and South America. And again the US stands out with higher case and death rates and counts.
+
+One area to also explore is how often people in different countries may catch COVID more than once. If a country has a higher amount of second or third infections, that makes the comparison between countries more difficult and more interesting.
+
+So we've looked at the top ten countries by population and the top ten countries by total cases. Next let's look at the top ten countries by case percentage.
+
+```{r top_ten_max_cases_percent}
+per_country %>% 
+    slice_max(n = 10, order_by = max_cases_percent) %>% 
+    arrange(desc(max_cases_percent)) %>%
+    select(
+        combined_key,
+        max_cases_percent,
+        max_deaths_percent
+    ) %>% 
+    mutate(
+        
+        # Convering this to a factor so the bar chart ordering is by max_cases_percent
+        combined_key = parse_factor(combined_key),
+        
+        # This allows us to use scales::percent to format the Y axis
+        # without multiplying by 100 again in the label
+        max_cases_percent = max_cases_percent / 1000,
+        max_deaths_percent = max_deaths_percent / 100
+    ) %>% 
+    pivot_longer(
+        cols = c(
+            max_cases_percent,
+            max_deaths_percent
+        ),
+        names_to = "measure",
+        values_to = "count"
+    ) %>% 
+    
+    ggplot(aes(x = combined_key, y = count, fill = measure)) +
+    geom_bar(
+        stat = "identity",
+        position = "dodge",
+    ) +
+    coord_cartesian(expand = FALSE) +
+    labs(
+        title = "Top Ten Percent Cases",
+        x = "Percent Cases Ordered Largest to Smallest",
+        y = "Percent Cases (Divided by Ten) and Deaths"
+    ) +
+    theme_bw() +
+    theme(
+        axis.text.x = element_text(angle = 45, hjust = 1),
+        plot.title = element_text(hjust = 0.5)
+    ) +
+    scale_y_continuous(
+        labels = scales::percent
+    ) +
+    scale_fill_discrete(
+        name = "Case and Death Percent",
+        labels = c("Cases / 10", "Deaths")
+    )
+```
+
+The first observation that stands out to me is that none of these ten countries are in the top ten most populous countries above. My initial guess was that having more people would lead to higher rates of at least infection. Not sure my instinct would be to extend that to deaths. But we can see here that some of these countries have smaller overall populations.
+
+It's also interesting that most of these countries are in Europe. I'd be curious to explore other geographical correlations to see if proximity or general region matters in terms of the COVID counts.
+
+Similar to above, I'd like to look at population density. It might be that these countries have more people packed in similar amounts of space.
+
+For other next steps, I'd be curious to see if there are any policies in these countries that possibly led to increased exposure. For instance, these countries may have had sufficient healthcare available to handle increased infections in hopes of controlling when and how the spread of COVID hit their countries.
+
+To summarize a few overall follow up steps that these graphs left me wanting to learn more about:
+
+- Is percent even the right metric for a rate comparison? My guess is no, and especially not for a static population over the entire range of dates for COVID counts.
+
+- I used country as a distinguishing factor here, but I'm curious if country borders aren't the best way to group people. I imagine there is more granular data, similar to breakdowns by county in the US. It may be that regions that cross over country borders are better for understanding COVID trends. Also, it may be that certain regions within countries are more responsible for COVID numbers than other regions.
+
+- I grouped country counts and rates together, removing date distinctions. If a country gets hit with high COVID numbers early on before realizing the what's happening, but then that country responds well and handles the rest of the pandemic better, then the overall numbers for that country may remain high when the actual story is more nuanced.
+
+- I also want to call out that the interesting patterns above are just initial observations. There isn't anything causal to see here, and I'm not quite comfortable even moving into correlation. These primarily point me in directions to explore in the next iteration of analysis. I just want to be careful not to jump into conclusions that may be hinted at here but not supported enough or proven.
+
+## What a Model
+
+I want to return to case counts, but this time we'll focus on new daily counts. Following up on the question above about how populations may affect counts, I want to add predictive linear models for different numbers of the most populous countries to see how well models built on subsets predict the overall dataset.
+
+My initial question is if we'll see the predictive lines get closer and closer to the line produced when building the model off of the entire global dataset as we add more countries into each model. As we start with the top ten most populous countries and move to the top twenty and thirty and up through the top sixty, do the predictive lines get closer and closer to the global prediction line?
+
+Here's what I'm thinking. If the predictive lines get closer to the global prediction line as we add in more countries, then that hints to me that all countries -- including ones with smaller populations -- have a noticeable effect on the overall trends in COVID data and predictions that come out of those trends. However, if we don't see the models get increasingly closer to the global model line, then it may be that there's something more interesting going on in terms of how countries of different sizes of population affect the models.
+
+Okay. Let's start by building our dataset with one row per date and sum together the other measures except for population. We're not going to use rates for this, so we'll leave population out. We can go back to the dataset we built in the tidying section above and start again from there.
+
+```{r tidy_grouped_global_counts}
+grouped_global_counts <- global_clean %>% 
+    group_by(
+        date
+    ) %>% 
+    summarize(
+        cases = sum(cases, na.rm = TRUE),
+        deaths = sum(deaths, na.rm = TRUE),
+        recovered = sum(recovered, na.rm = TRUE),
+        new_cases = sum(new_cases, na.rm = TRUE),
+        new_deaths = sum(new_deaths, na.rm = TRUE),
+        new_recovered = sum(new_recovered, na.rm = TRUE)
+    ) %>%
+    filter(!is.na(date)) %>% 
+    arrange(date)
+```
+
+There's a lot of repetitive code in the next two chunks. I figure it could help to have a quick pointer through what's happening. Feel free to skip ahead if you'd rather read through the code to see what's going on here instead.
+
+- We have three datasets we're working with
+    1. global_clean: the original dataset from the tidying section with one row per combined_key and date
+    2. per_country: the dataset from above with one row per country and picking the highest counts for each field and then calculating percentages
+    3. grouped_global_counts: we built this in the last code chunk to have one row per date and summing the measures across all countries
+- We use per_country to grab the top n countries by population for the top 10 through top 60
+- We pull the rows out of global_clean for the top n countries for each grouping
+- We build each of our linear models based on the subsets from the previous bullet point
+
+At this stage, we have one global linear model and six linear models based on subsets of the highest population countries. We'll graph all of these on top of a scatterplot of grouped_global_counts so we can see the models against the data points.
+
+```{r top_countries_by_date}
+top_10_by_population <- per_country %>% 
+    slice_max(n = 10, order_by = pop) %>% 
+    select(combined_key) %>% 
+    pull()
+
+top_20_by_population <- per_country %>% 
+    slice_max(n = 20, order_by = pop) %>% 
+    select(combined_key) %>% 
+    pull()
+
+top_30_by_population <- per_country %>% 
+    slice_max(n = 30, order_by = pop) %>% 
+    select(combined_key) %>% 
+    pull()
+
+top_40_by_population <- per_country %>% 
+    slice_max(n = 40, order_by = pop) %>% 
+    select(combined_key) %>% 
+    pull()
+
+top_50_by_population <- per_country %>% 
+    slice_max(n = 50, order_by = pop) %>% 
+    select(combined_key) %>% 
+    pull()
+
+top_60_by_population <- per_country %>% 
+    slice_max(n = 60, order_by = pop) %>% 
+    select(combined_key) %>% 
+    pull()
+
+
+
+top_10_by_population_by_date <- global_clean %>% 
+    filter(combined_key %in% top_10_by_population) %>% 
+    group_by(
+        date
+    ) %>% 
+    summarize(
+        cases = sum(cases, na.rm = TRUE),
+        deaths = sum(deaths, na.rm = TRUE),
+        recovered = sum(recovered, na.rm = TRUE),
+        new_cases = sum(new_cases, na.rm = TRUE),
+        new_deaths = sum(new_deaths, na.rm = TRUE),
+        new_recovered = sum(new_recovered, na.rm = TRUE)
+    ) %>%
+    filter(!is.na(date)) %>% 
+    arrange(date)
+
+top_20_by_population_by_date <- global_clean %>% 
+    filter(combined_key %in% top_20_by_population) %>% 
+    group_by(
+        date
+    ) %>% 
+    summarize(
+        cases = sum(cases, na.rm = TRUE),
+        deaths = sum(deaths, na.rm = TRUE),
+        recovered = sum(recovered, na.rm = TRUE),
+        new_cases = sum(new_cases, na.rm = TRUE),
+        new_deaths = sum(new_deaths, na.rm = TRUE),
+        new_recovered = sum(new_recovered, na.rm = TRUE)
+    ) %>%
+    filter(!is.na(date)) %>% 
+    arrange(date)
+
+top_30_by_population_by_date <- global_clean %>% 
+    filter(combined_key %in% top_30_by_population) %>% 
+    group_by(
+        date
+    ) %>% 
+    summarize(
+        cases = sum(cases, na.rm = TRUE),
+        deaths = sum(deaths, na.rm = TRUE),
+        recovered = sum(recovered, na.rm = TRUE),
+        new_cases = sum(new_cases, na.rm = TRUE),
+        new_deaths = sum(new_deaths, na.rm = TRUE),
+        new_recovered = sum(new_recovered, na.rm = TRUE)
+    ) %>%
+    filter(!is.na(date)) %>% 
+    arrange(date)
+
+top_40_by_population_by_date <- global_clean %>% 
+    filter(combined_key %in% top_40_by_population) %>% 
+    group_by(
+        date
+    ) %>% 
+    summarize(
+        cases = sum(cases, na.rm = TRUE),
+        deaths = sum(deaths, na.rm = TRUE),
+        recovered = sum(recovered, na.rm = TRUE),
+        new_cases = sum(new_cases, na.rm = TRUE),
+        new_deaths = sum(new_deaths, na.rm = TRUE),
+        new_recovered = sum(new_recovered, na.rm = TRUE)
+    ) %>%
+    filter(!is.na(date)) %>% 
+    arrange(date)
+
+top_50_by_population_by_date <- global_clean %>% 
+    filter(combined_key %in% top_50_by_population) %>% 
+    group_by(
+        date
+    ) %>% 
+    summarize(
+        cases = sum(cases, na.rm = TRUE),
+        deaths = sum(deaths, na.rm = TRUE),
+        recovered = sum(recovered, na.rm = TRUE),
+        new_cases = sum(new_cases, na.rm = TRUE),
+        new_deaths = sum(new_deaths, na.rm = TRUE),
+        new_recovered = sum(new_recovered, na.rm = TRUE)
+    ) %>%
+    filter(!is.na(date)) %>% 
+    arrange(date)
+
+top_60_by_population_by_date <- global_clean %>% 
+    filter(combined_key %in% top_60_by_population) %>% 
+    group_by(
+        date
+    ) %>% 
+    summarize(
+        cases = sum(cases, na.rm = TRUE),
+        deaths = sum(deaths, na.rm = TRUE),
+        recovered = sum(recovered, na.rm = TRUE),
+        new_cases = sum(new_cases, na.rm = TRUE),
+        new_deaths = sum(new_deaths, na.rm = TRUE),
+        new_recovered = sum(new_recovered, na.rm = TRUE)
+    ) %>%
+    filter(!is.na(date)) %>% 
+    arrange(date)
+
+
+
+rm(top_10_by_population)
+rm(top_20_by_population)
+rm(top_30_by_population)
+rm(top_40_by_population)
+rm(top_50_by_population)
+rm(top_60_by_population)
+```
+
+```{r model_new_cases, fig.show='hold', out.width='80%'}
+
+mod_global <- lm(new_cases ~ date, data = grouped_global_counts)
+mod_top_10_pop <- lm(new_cases ~ date, data = top_10_by_population_by_date)
+mod_top_20_pop <- lm(new_cases ~ date, data = top_20_by_population_by_date)
+mod_top_30_pop <- lm(new_cases ~ date, data = top_30_by_population_by_date)
+mod_top_40_pop <- lm(new_cases ~ date, data = top_40_by_population_by_date)
+mod_top_50_pop <- lm(new_cases ~ date, data = top_50_by_population_by_date)
+mod_top_60_pop <- lm(new_cases ~ date, data = top_60_by_population_by_date)
+
+# complete scatterplot
+grouped_global_counts %>% 
+    ggplot(aes(x = date, y = new_cases)) +
+    geom_point() +
+    coord_cartesian(expand = FALSE) +
+    labs(
+        title = "Global New Daily Cases",
+        x = NULL,
+        y = "Cases"
+    ) +
+    theme_bw() +
+    theme(
+        plot.title = element_text(hjust = 0.5),
+    ) +
+    scale_x_date() +
+    scale_y_continuous(
+        labels = scales::comma,
+        limits = c(0, 4500000)
+    )
+
+# zoomed scatterplot with model lines
+grouped_global_counts %>% 
+    mutate(
+        pred_global = predict(mod_global),
+        pred_top_10_pop = predict(mod_top_10_pop),
+        pred_top_20_pop = predict(mod_top_20_pop),
+        pred_top_30_pop = predict(mod_top_30_pop),
+        pred_top_40_pop = predict(mod_top_40_pop),
+        pred_top_50_pop = predict(mod_top_50_pop),
+        pred_top_60_pop = predict(mod_top_60_pop)
+    ) %>% 
+    ggplot(aes(x = date)) +
+    geom_point(aes(y = new_cases)) +
+
+    geom_smooth(aes(y = pred_global, color = "black")) +
+    geom_smooth(aes(y = pred_top_10_pop, color = "red")) +
+    geom_smooth(aes(y = pred_top_20_pop, color = "orange")) +
+    geom_smooth(aes(y = pred_top_30_pop, color = "yellow")) +
+    geom_smooth(aes(y = pred_top_40_pop, color = "green")) +
+    geom_smooth(aes(y = pred_top_50_pop, color = "blue")) +
+    geom_smooth(aes(y = pred_top_60_pop, color = "violet")) +
+
+    coord_cartesian(expand = FALSE) +
+    labs(
+        title = "Prediction of Global New Daily Cases by Top n Countries",
+        x = NULL,
+        y = "Cases"
+    ) +
+    theme_bw() +
+    theme(
+        plot.title = element_text(hjust = 0.5),
+        legend.title = element_blank()
+    ) +
+    scale_x_date() +
+    scale_y_continuous(
+        labels = scales::comma,
+        limits = c(0, 1000000)
+    ) +
+    scale_color_manual(
+        values = c("black", "red", "orange", "yellow", "green", "blue", "violet"),
+        labels = c("global", "top 10", "top 20", "top 30", "top 40", "top 50", "top 60")
+    )
+
+rm(mod_global)
+rm(mod_top_10_pop)
+rm(mod_top_20_pop)
+rm(mod_top_30_pop)
+rm(mod_top_40_pop)
+rm(mod_top_50_pop)
+rm(mod_top_60_pop)
+```
+
+As we go from top 10 to top 40, the slope of the prediction lines decreases and moves away from the global prediction line. Top 50 then jumps up closest to the global line, and then top 60 drops down again. This fits closer to the second scenario above where adding in more countries doesn't mean a more accurate model as compared to the global model.
+
+This is interesting in terms of follow up steps. I'd like to find which ten new countries are added into each model. It looks like some of those groups of ten have low enough new daily cases that they're pulling the models downwards, while the group we added in top 50 looks like it's pulling the model up closest to the global model.
+
+I'd be curious to see if there's something to do with the distribution of COVID cases through time for these different groups of ten. For instance, if the group we add for top 40 has relatively smaller populations and managed the spread of COVID well enough, then it may be that their spike isn't that big and that overall new cases are spread evenly, contrasting with countries who maybe didn't handle the spread well and had continuous spikes or overall continuous high new daily case counts. Just as one idea to explore for what might be going on.
+
+There's lots more to try and pull out of this graph for the next round of exploration. I think having the models here helps to paint a more complicated story about COVID counts than just seeing the graphs above without the models.
+
+## Conclusion
+
+While we haven't reached any causal or correlative conclusions here, I do think we've found that there's enough of a link between overall population and COVID numbers to do a deeper study between those measures. We focused on total cumulative COVID cases, COVID case percentages in relation to overall population, and new daily COVID cases.
+
+The main takeaway from this analysis is that we need to pull in extra information about countries as well as being able to explore measures in smaller time increments. For example, it would help to know if there are subgroups within a country or even across country borders that give a better picture in terms of COVID trends.
+
+I also think exploring each of the aspects in this analysis for smaller date ranges will let us see how COVID spikes are distributed over time for different countries. In theory we can do that with the data we have here, excluding the fact that population is one static number right now for the entire range of dates, but the analysis gets complicated pretty quickly. For now, that means that we'd need a more complicated approach to the analysis to do the next pass, and I'm not quite sure yet how I'd set that up. But it's worth exploring.
+
+Before we finish up, I want to call out some areas of bias.
+
+As mentioned earlier, I'm iffy about some of the decisions I made during tidying. The really obvious flaw in this analysis is that China -- the most populous country -- isn't included when we're talking about population by country. Staying in the vein of population, a focus on overall population size like we did here puts more attention on countries with larger populations, leaving out those with smaller populations. We want to be careful when we prioritize different groups over others, especially if we were to make policy decisions based on population size with those decisions favoring action for more populous countries at the expense of less populous ones.
+
+I also made the call in some of the plots to exclude rows with commas in combined_key. This needs more attention. We likely dropped some countries altogether because of this, and we want to be sure to include them before we start reaching for anything like policy recommendations or such.
+
+One other area in terms of my choice of analysis above is that we don't really see much representation from Africa or South America. Due to the fact that the US has such high numbers and is one of the top 10 most populous countries, we probably see an outsized representation for North America. We don't want to change the questions we're asking just to include other areas and other people, but we want to be careful that we don't implicitly convey greater importance for certain areas over others.
+
+Somewhat related is that I didn't do deeper analysis on outliers. I hint at them in the sense of certain countries or certain date ranges being more impactful if we break those down further, but I'd want to be sure to get a sense of where the outliers are and how they fit into the human story behind the data.
+
+As one final area to call out from my analysis, while I show COVID death info in some of the graphs, I focus on cases. I'm not knowledgeable enough about health data to know when it's right to focus on cases vs deaths and how to handle that nuance, but I could see legitimate concerns over emphasizing cases over deaths. Also, we don't have distinctions between serious and trivial cases here. There are real people suffering through COVID infections behind all of this data, and I'd need to spend more time understanding which aspects of COVID need to be brought to the front of the analysis. It can be easy to turn people into numbers and lose sight of the real world scenarios we're analyzing.
+
+As for some possible bias in terms of the source data collection, I'd like to get more info on how Johns Hopkins gathered this data. They share some info, but I'd like to dive deeper into collection to see if we're overemphasizing countries with better health reporting infrastructure. Just because a country may be small, remote, or have less resources to report health data doesn't mean we should lose sight of its impact on the results here. We may never get a fully balanced picture between all countries, but we at least want to know where we aren't factoring countries in as much as we should and why.
+
+Thanks for reading! I had fun on this assignment and look forward to your feedback.
+
+```{r session_info}
+sessionInfo()
+```
