@@ -1,0 +1,1658 @@
+---
+title: "COVID-19 Capstone"
+author: "Joseph Leakakos"
+date: "`r Sys.Date()`"
+output:
+  pdf_document: default
+---
+
+```{r setup, echo=FALSE, error=FALSE, message=FALSE, warning=FALSE, comment=NA}
+library(knitr)
+knitr::opts_chunk$set(comment=NA, message=FALSE, echo=TRUE, warning=FALSE, 
+                      error=FALSE, fig.path = "img/", fig.align='center')
+options(width=80)
+```
+
+```{r libraries, include=FALSE}
+library(tidyverse)
+library(lubridate)
+library(usmap)
+```
+
+## Part 1 - Basic Exploration of US Data
+
+The New York Times (the Times) has aggregated reported COVID-19 data from state and local governments and health departments since 2020 and provides public access through a repository on GitHub. One of the data sets provided by the Times is county-level data for cumulative cases and deaths each day. This will be your primary data set for the first two parts of your analysis.
+
+County-level COVID data from 2020, 2021, and 2022 has been imported below. Each row of data reports the cumulative number of cases and deaths for a specific county each day. A FIPS code, a standard geographic identifier, is also provided which you will use in Part 2 to construct a map visualization at the county level for a state. 
+
+Additionally, county-level population estimates reported by the US Census Bureau has been imported as well. You will use these estimates to calculate statistics per 100,000 people. 
+
+```{r import-nyt-data}
+# Import New York Times COVID-19 data
+# Import Population Estimates from US Census Bureau 
+
+us_counties_2020 <- read_csv(
+    "https://raw.githubusercontent.com/nytimes/covid-19-data/master/us-counties-2020.csv")
+us_counties_2021 <- read_csv(
+    "https://raw.githubusercontent.com/nytimes/covid-19-data/master/us-counties-2021.csv")
+us_counties_2022 <- read_csv(
+    "https://raw.githubusercontent.com/nytimes/covid-19-data/master/us-counties-2022.csv")
+
+us_population_estimates <- read_csv("fips_population_estimates.csv")
+```
+
+### Question 1 
+
+Your first task is to combine and tidy the 2020, 2021, and 2022 COVID data sets and find the total deaths and cases for each day since March 15, 2020 (2020-03-15). The data sets provided from the NY Times also includes statistics from Puerto Rico, a US territory. You may remove these observations from the data as they will not be needed for your analysis. Once you have tidied the data, find the total COVID-19 cases and deaths since March 15, 2020. Write a sentence or two after the code block communicating your results. Use inline code to include the `max_date`, `us_total_cases`, and `us_total_deaths` variables. To write inline code use `r `. 
+
+```{r p1q1-response}
+
+# Combine and tidy the 2020, 2021, and 2022 COVID data sets. 
+# Hint: Review the rbind() documentation to combine the three data sets. 
+#
+## YOUR CODE HERE ##
+
+counties <- bind_rows(us_counties_2020, us_counties_2021, us_counties_2022)
+counties$fips <- parse_number(counties$fips)
+
+# Drop ~76,725 rows for Puerto Rico
+# Note that dropping these rows also removes all NAs for deaths
+counties <- counties %>% 
+    filter(state != "Puerto Rico")
+
+totals <- counties %>% 
+    filter(date >= "2020-03-15") %>% 
+    group_by(date) %>% 
+    summarize(
+        total_deaths = sum(deaths),
+        total_cases = sum(cases)
+    ) %>% 
+    arrange(date)
+
+# replace the quotes with your code to find the most recent date in the data set
+max_date <- max(totals$date)
+us_total_cases <- totals$total_cases[totals$date == max_date]
+us_total_deaths <- totals$total_deaths[totals$date == max_date]
+```
+
+```{r p1q1-sample, eval=FALSE, echo=FALSE}
+
+# Your output should look similar to the following tibble: 
+#
+#   A tibble: 657 x 3
+#       date          total_deaths   total_cases
+#      <date>            <dbl>         <dbl>
+#   1 2020-03-15           68          3595
+#   2 2020-03-16           91          4502
+#   3 2020-03-17          117          5901
+#   4 2020-03-18          162          8345
+#   5 2020-03-19          212         12387
+#   6 2020-03-20          277         17998
+#   7 2020-03-21          359         24507
+#   8 2020-03-22          457         33050
+#   9 2020-03-23          577         43474
+#  10 2020-03-24          783         53899
+# ... with 647 more rows
+#
+```
+
+-- Communicate your methodology, results, and interpretation here -- 
+
+As of `r format(max_date, "%d %B %Y")`, the summary numbers since `r format(min(totals$date), "%d %B %Y")` are:
+
+- Total deaths: `r format(us_total_deaths, big.mark = ",")`
+- Total cases: `r format(us_total_cases, big.mark = ",")`
+
+Since the death and case counts are cumulative over time, we can grab the maximum values for them from the row with the latest date in the dataset. 
+
+Comparing our cumulative totals as of 31 December 2022 to the CDC COVID Data Tracker at https://covid.cdc.gov shows that our numbers are close to the CDC's numbers, so we're in the ballpark of what they're seeing.
+
+### Question 2 
+
+Create a visualization for the total number of deaths and cases in the US since March 15, 2020. Before you create your visualization, review the types of plots you can create using the ggplot2 library and think about which plots would be effective in communicating your results. After you have created your visualization, write a few sentences describing your visualization. How could the plot be interpreted? Could it be misleading? 
+
+```{r p1q2-response}
+
+# Create a visualization for the total number of US cases and deaths since March 15, 2020. 
+#
+## YOUR CODE HERE ##
+
+totals %>%
+    mutate(cases_scaled = total_cases / 100) %>%
+    rename(
+        "Modified Cases" = cases_scaled,
+        Deaths = total_deaths
+    ) %>% 
+    pivot_longer(
+        c(
+            "Deaths",
+            "Modified Cases"
+        ),
+        names_to = "count_type",
+        values_to = "counts"
+    ) %>%
+    
+    ggplot(aes(
+        x = date, 
+        y = counts, 
+        color = count_type
+    )) +
+    
+    geom_smooth() +
+    
+    scale_x_date(
+        date_breaks = "1 year",
+        date_labels = "%b %Y"
+    ) +
+
+    scale_y_continuous(labels = scales::number) +
+    coord_cartesian(expand = FALSE) +
+    labs(
+        title = "Shape of Deaths and Modified Cases",
+        subtitle = "[modified case values are 1/100 of originals]",
+        x = "Date", 
+        y = "Cumulative Totals"
+    ) +
+    
+    scale_color_manual(values = c("blue", "purple")) +
+    
+    theme_bw() +
+    theme(
+        plot.title = element_text(hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.97),
+        legend.title = element_blank()
+    )
+```
+
+-- Communicate your methodology, results, and interpretation here -- 
+
+I chose to focus on showing the relationship between deaths and cases by displaying the shape of their cumulative counts over time. The big catch here is that I divided the cases measure by 100 to get both plots on the same scale. If you plot them with their actual totals at their original scales, cases dwarf deaths to the point that the visualization misrepresents one of the measures. So, by bringing these measures closer together in terms of scale, we can compare the overall shapes to see if increases and decreases and such happen around similar dates between the two measures, as one example.
+
+The big downside to this approach is that it makes it look like cases and deaths are close in terms of quantity when that isn't true. Viewers typically don't read axes and annotations, so I put a note just under the title calling attention to the modified scaling for cases.
+
+I was hoping here to see if deaths consistently trail cases by a certain amount of time, but the visuals weren't granular enough to see that. Answering a question about these trends might be better solved by calculating lagging or leading values with `lag()` or `lead()` and looking at those instead.
+
+That all said, for the current visualization, there's a big risk that readers will just ignore the axes and conclude that cases are actually lower than deaths.
+
+One interesting possibility I can see in the visualization here is that cases have larger spikes in increases and decreases whereas deaths look a little bit more like a straight line with smoother increases and decreases. I'd be curious to pull in some outside info to try and figure out what might be leading to those differences.
+
+### Question 3
+
+While it is important to know the total deaths and cases throughout the COVID-19 pandemic, it is also important for local and state health officials to know the the number of new cases and deaths each day to understand how rapidly the virus is spreading. Using the table you created in Question 1, calculate the number of new deaths and cases each day and a seven-day average of new deaths and cases. Once you have organized your data, find the days that saw the largest number of new cases and deaths. Write a sentence or two after the code block communicating your results.
+
+```{r p1q3-response}
+
+# Create a new table, based on the table from Question 1, and calculate the number of new deaths and cases each day and a seven day average of new deaths and cases. 
+#
+# Hint: Look at the documentation for lag() when computing the number of new deaths and cases and the seven-day averages. 
+#
+#
+## YOUR CODE HERE ##
+
+delta <- totals %>%
+    mutate(
+        delta_deaths_1 = total_deaths - lag(total_deaths, order_by = date),
+        delta_cases_1 = total_cases - lag(total_cases, order_by = date),
+        delta_deaths_7 = round((
+            delta_deaths_1 +
+                lag(delta_deaths_1, 1, order_by = date) +
+                lag(delta_deaths_1, 2, order_by = date) +
+                lag(delta_deaths_1, 3, order_by = date) +
+                lag(delta_deaths_1, 4, order_by = date) +
+                lag(delta_deaths_1, 5, order_by = date) +
+                lag(delta_deaths_1, 6, order_by = date)
+        ) / 7, 2),
+        delta_cases_7 = round((
+            delta_cases_1 +
+                lag(delta_cases_1, 1, order_by = date) +
+                lag(delta_cases_1, 2, order_by = date) +
+                lag(delta_cases_1, 3, order_by = date) +
+                lag(delta_cases_1, 4, order_by = date) +
+                lag(delta_cases_1, 5, order_by = date) +
+                lag(delta_cases_1, 6, order_by = date)
+        ) / 7, 2)
+    )
+
+max_new_deaths_date <- delta$date[
+    which(delta$delta_deaths_1 == max(delta$delta_deaths_1, na.rm = TRUE))]
+max_new_cases_date <- delta$date[
+    which(delta$delta_cases_1 == max(delta$delta_cases_1, na.rm = TRUE))]
+```
+
+```{r p1q3-sample, eval=FALSE, echo=FALSE}
+
+#  Your output should look similar to the following tibble: 
+#  
+#  date
+#  total_deaths     >  the cumulative number of deaths up to and including the associated date
+#  total_cases      >  the cumulative number of cases up to and including the associated date
+#  delta_deaths_1   >  the number of new deaths since the previous day
+#  delta_cases_1    >  the number of new cases since the previous day
+#  delta_deaths_7   >  the average number of deaths in a seven-day period
+#  delta_cases_7    >  the average number of cases in a seven-day period
+#==
+#  A tibble: 813 x 7
+#    date           total_deaths   total_cases   delta_deaths_1    delta_cases_1  delta_deaths_7  delta_cases_7
+#    <date>            <dbl>          <dbl>         <dbl>               <dbl>        <dbl>            <dbl>
+#  1 2020-03-15           68          3600            0                     0         NA                NA 
+#  2 2020-03-16           91          4507           23                   907         NA                NA 
+#  3 2020-03-17          117          5906           26                  1399         NA                NA 
+#  4 2020-03-18          162          8350           45                  2444         NA                NA 
+#  5 2020-03-19          212         12393           50                  4043         NA                NA 
+#  6 2020-03-20          277         18012           65                  5619         NA                NA 
+#  7 2020-03-21          360         24528           83                  6516         NA                NA 
+#  8 2020-03-22          458         33073           98                  8545       55.7              4210.
+#  9 2020-03-23          579         43505          121                 10432       69.7              5571.
+# 10 2020-03-24          785         53938          206                 10433       95.4              6862.
+# ... with 803 more rows
+```
+
+-- Communicate your methodology, results, and interpretation here -- 
+
+Calculating the statistics above, we get:
+
+- Date of max new deaths is `r format(max_new_deaths_date, "%d %B %Y")` with `r format(delta$delta_deaths_1[delta$date == max_new_deaths_date], big.mark = ",")` deaths
+- Date of max new cases is `r format(max_new_cases_date, "%d %B %Y")` with `r format(delta$delta_cases_1[delta$date == max_new_cases_date], big.mark = ",")` cases
+
+The general approach here is to take advantage of `lag()` to compare neighboring values.
+
+I did run into trouble trying to use `mean()` instead of manually calculating the seven-day averages. I'm curious if anyone reading this figured out how to make that work. If you did, can you leave me a post on the assignment letting me know how you did it? I have a few ideas of what's going wrong, mostly that the input to `mean()` isn't the right quantity of values, so something's going on there.
+
+Anyways, the above code works, if a little manual. We order the tibble by date and calculate changes in deaths and cases each day. We then use those individual daily changes to calculate the sliding seven-day averages.
+
+One interesting thing I found is that the max seven-day average for cases falls around the max daily new cases, but the average for deaths is not around the date for the max daily deaths.
+
+- Max seven-day deaths average is `r format(max(delta$delta_deaths_7, na.rm = TRUE), big.mark = ",")` on `r format(delta$date[which(delta$delta_deaths_7 == max(delta$delta_deaths_7, na.rm = TRUE))], "%d %B %Y")`
+- Max seven-day cases average is `r format(max(delta$delta_cases_7, na.rm = TRUE), big.mark = ",")` on `r format(delta$date[which(delta$delta_cases_7 == max(delta$delta_cases_7, na.rm = TRUE))], "%d %B %Y")`
+
+### Question 4
+
+```{r p1q4-response}
+
+# Create a new table, based on the table from Question 3, and calculate the number of new deaths and cases per 100,000 people each day and a seven day average of new deaths and cases per 100,000 people. 
+
+# Hint: To calculate per 100,000 people, first tidy the population estimates data and calculate the US population in 2020 and 2021. Then, you will need to divide  each statistic by the estimated population and then multiply by 100,000.
+#
+# Hint: look at the help documentation for grepl() and case_when() to divide the averages by the US population for each year. 
+# For example, take the simple tibble, t_new: 
+#
+#     x     y   
+#   <int> <chr>  
+#     1     a   
+#     2     b   
+#     3     a    
+#     4     b  
+#     5     a  
+#     6     b
+#
+#
+# To add a column, z, that is dependent on the value in y, you could: 
+#
+# t_new %>%  
+#   mutate(z = case_when(grepl("a", y) ~ "not b", 
+#                        grepl("b", y) ~ "not a"))
+#
+
+## YOUR CODE HERE ##
+
+pops <- us_population_estimates %>%
+    group_by(Year) %>% 
+    summarize(
+        us_pop = sum(Estimate)
+    )
+
+delta_per_pop <- delta %>% 
+    mutate(Year = year(date)) %>% 
+    inner_join(pops, by = "Year") %>% 
+    mutate(
+        delta_deaths_1 = signif(delta_deaths_1 / us_pop * 100000, 3),
+        delta_cases_1 = signif(delta_cases_1 / us_pop * 100000, 3),
+        delta_deaths_7 = signif(delta_deaths_7 / us_pop * 100000, 3),
+        delta_cases_7 = signif(delta_cases_7 / us_pop * 100000, 3)
+    ) %>% 
+    select(-c("Year", "us_pop"))
+```
+
+```{r p1q4-sample}
+
+#  Your output should look similar to the following tibble: 
+#  
+#  date
+#  total_deaths     >  the cumulative number of deaths up to and including the associated date
+#  total_cases      >  the cumulative number of cases up to and including the associated date
+#  delta_deaths_1   >  the number of new deaths since the previous day
+#  delta_cases_1    >  the number of new cases since the previous day
+#  delta_deaths_7   >  the average number of deaths in a seven-day period
+#  delta_cases_7    >  the average number of cases in a seven-day period
+#==
+#  A tibble: 657 x 7
+#       date         total_deaths   total_cases   delta_deaths_1   delta_cases_1 delta_deaths_7 delta_cases_7
+#      <date>            <dbl>         <dbl>          <dbl>           <dbl>           <dbl>         <dbl>
+#   1 2020-03-15         0.0205        1.08                0              0              NA           NA   
+#   2 2020-03-16         0.0275        1.36          0.00694          0.274              NA           NA   
+#   3 2020-03-17         0.0353        1.78          0.00784          0.422              NA           NA   
+#   4 2020-03-18         0.0489        2.52           0.0136          0.737              NA           NA   
+#   5 2020-03-19         0.0640        3.74           0.0151           1.22              NA           NA   
+#   6 2020-03-20         0.0836        5.43           0.0196           1.69              NA           NA   
+#   7 2020-03-21         0.108         7.39           0.0247           1.96              NA           NA   
+#   8 2020-03-22         0.138         9.97           0.0296           2.58          0.0168         1.27
+#   9 2020-03-23         0.174         13.1           0.0362           3.14          0.0209         1.68
+#  10 2020-03-24         0.236         16.3           0.0621           3.14          0.0287         2.07
+```
+
+-- Communicate your methodology, results, and interpretation here -- 
+
+The first thing to note is that us_population_estimates has data for 2020 and 2021 but not for 2022, so we lose the 2022 rows from the COVID dataset we've been building up.
+
+I went a different tidying route from the hints in the code chunk. I find it more straightforward to use dplyr pipes and joins to build the dataset. I'm adding the population data into the COVID dataset, calculating the per 100,000 people, and then dropping the extra columns.
+
+One other thing is that I left the original values for total_deaths and total_cases instead of also applying the per 100,000 people logic to those columns.
+
+### Question 5
+
+```{r p1q5-response}
+
+# Create a visualization to compare the seven-day average cases and deaths per 100,000 people. 
+
+delta_vis <- delta_per_pop %>% 
+    pivot_longer(
+        c(
+            delta_deaths_1,
+            delta_cases_1,
+            delta_deaths_7,
+            delta_cases_7
+        ),
+        names_to = "stat",
+        values_to = "counts"
+    )
+ 
+# Deaths
+delta_vis %>% 
+    filter(grepl("deaths", stat)) %>% 
+    
+    ggplot(
+        aes(
+            x = date,
+            y = counts,
+            color = stat
+        )
+    ) +
+    
+    geom_smooth(se = FALSE) +
+    
+    scale_x_date(
+        date_breaks = "3 months",
+        date_labels = "%b %Y"
+    ) +
+
+    scale_y_continuous(labels = scales::number) +
+    ylim(0, NA) +
+    coord_cartesian(expand = FALSE) +
+    labs(
+        title = "Daily vs Seven-Day Average New Deaths",
+        x = "Date", 
+        y = "New Deaths per 100,000 People"
+    ) +
+    
+    scale_color_manual(
+        values = c("blue", "orange"),
+        name = "Deaths",
+        labels = c("Daily", "Seven-Day Average")
+    ) +
+
+    theme_bw() +
+    theme(
+        plot.title = element_text(hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.97),
+        axis.text.x = element_text(angle = 45, hjust = 1)
+    )
+    
+# Cases
+delta_vis %>% 
+    filter(grepl("cases", stat)) %>% 
+    
+    ggplot(
+        aes(
+            x = date,
+            y = counts,
+            color = stat
+        )
+    ) +
+    
+    geom_smooth(se = FALSE) +
+    
+    scale_x_date(
+        date_breaks = "3 months",
+        date_labels = "%b %Y"
+    ) +
+
+    scale_y_continuous(labels = scales::number) +
+    ylim(0, NA) +
+    coord_cartesian(expand = FALSE) +
+    labs(
+        title = "Daily vs Seven-Day Average New Cases",
+        x = "Date", 
+        y = "New Cases per 100,000 People"
+    ) +
+    
+    scale_color_manual(
+        values = c("green", "purple"),
+        name = "Cases",
+        labels = c("Daily", "Seven-Day Average")
+    ) +
+
+    theme_bw() +
+    theme(
+        plot.title = element_text(hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.97),
+        axis.text.x = element_text(angle = 45, hjust = 1)
+    )
+```
+
+-- Communicate your methodology, results, and interpretation here -- 
+
+The visualization here plots the daily vs seven-day averages in separate graphs so we can see deaths separate from cases. The same scale issue from the previous chart applies here. This time I went for two different charts instead of modifying one of the measures to get the scales closer together.
+
+My main interest here is to see if there are areas where the daily and seven-day averages deviate from each other. As one example, in the chart for cases, daily new cases outpace the seven-day average consistently starting around August to September 2021. This hints that the rate of new daily cases is increasing throughout that period.
+
+There are also a few points on both charts where the lines cross in terms of which one is above the other. These would be dates to explore further in terms of what might be going on with the pandemic around then that causes the lines to flip.
+
+## Part 2 - US State Comparison
+
+While understanding the trends on a national level can be helpful in understanding how COVID-19 impacted the United States, it is important to remember that the virus arrived in the United States at different times. For the next part of your analysis, you will begin to look at COVID related deaths and cases at the state and county-levels.
+
+### Question 1
+
+Your first task in Part 2 is to determine the top 10 states in terms of total deaths and cases between March 15, 2020, and December 31, 2021.
+
+Once you have both lists, briefly describe your methodology and your results.
+
+```{r p2q1-response}
+
+# Determine the top 10 states in terms of total deaths and cases between March 15, 2020, and December 31, 2021. To do this, transform your combined COVID-19 data to summarize total deaths and cases by state up to December 31, 2021. 
+
+states <- counties %>% 
+    group_by(
+        date,
+        state
+    ) %>% 
+    summarize(
+        total_deaths = sum(deaths),
+        total_cases = sum(cases)
+    )
+
+states_max_totals <- states %>% 
+    filter(date == "2021-12-31") %>%
+    select(
+        state,
+        date,
+        total_deaths,
+        total_cases
+    ) %>%
+    arrange(desc(total_cases))
+
+states_max_totals
+```
+
+```{r p2q1-sample}
+
+# Your transformed data should look similar to the following tibble:  
+#
+# A tibble: 51 x 4
+#     state                  date       total_deaths  total_cases
+#     <chr>                 <date>          <dbl>       <dbl>
+#  1 California           2021-12-31        76709      5515613
+#  2 Texas                2021-12-31        76062      4574881
+#  3 Florida              2021-12-31        62504      4166392
+#  4 New York             2021-12-31        58993      3473970
+#  5 Illinois             2021-12-31        31017      2154058
+#  6 Pennsylvania         2021-12-31        36705      2036424
+#  7 Ohio                 2021-12-31        29447      2016095
+#  8 Georgia              2021-12-31        30283      1798497
+#  9 Michigan             2021-12-31        28984      1706355
+# 10 North Carolina       2021-12-31        19436      1685504
+# ... with 41 more rows
+```
+
+-- Communicate your methodology, results, and interpretation here -- 
+
+The process here is similar to when we grouped by date at the start of week one. We're just including state in the grouping this time. The sample tibble in the code chunk immediately above looks like it filtered only for 31 December 2021 to get the max cumulative deaths and cases up until then, but we'll need daily totals as well in a few questions, so I split the logic here to accommodate both.
+
+Also, the prompt says to calculate deaths and cases between the two dates, but the tibble looks like it's just pulling from that final date instead of subtracting between the two, so I went with just filtering on the final date.
+
+The first thing that stands out here is that the top 10 states both by deaths and by cases are also some of the most populous states in the United States. We'll want to standardize these totals with a per-person summary to get a better comparison between how states performed during the pandemic.
+
+### Question 2
+
+Determine the top 10 states in terms of deaths per 100,000 people and cases per 100,000 people between March 15, 2020, and December 31, 2021.
+
+Once you have both lists, briefly describe your methodology and your results. Do you expect the lists to be different than the one produced in Question 1? Which method, total or per 100,000 people, is a better method for reporting the statistics? 
+
+```{r p2q2-response}
+
+# Determine the top 10 states in terms of deaths and cases per 100,000 people between March 15, 2020, and December 31, 2021. You should first tidy and transform the population estimates to include population totals by state. Use your relational data verbs (e.g. full_join()) to join the population estimates # with the cases and death statistics using the state name as a key. Then, use case_when() and grepl() to add a population column to your table that only includes the estimated population for the associated year. Finally, mutate your table to calculate deaths and cases per 100,000 people and summarize by state. 
+
+state_pops <- us_population_estimates %>% 
+    group_by(
+        STNAME,
+        Year
+    ) %>% 
+    summarize(
+        state_pop = sum(Estimate)
+    ) %>% 
+    rename(
+        state = STNAME
+    )
+
+states_max_totals_per_pop <- states_max_totals %>% 
+    mutate(Year = year(date)) %>% 
+    inner_join(state_pops, by = c("state", "Year")) %>% 
+    mutate(
+        deaths_per_100k = signif(total_deaths / state_pop * 100000, 3),
+        cases_per_100k = signif(total_cases / state_pop * 100000, 3)
+    ) %>% 
+    select(
+        state,
+        date,
+        deaths_per_100k,
+        cases_per_100k
+    )
+    
+
+states_max_totals_per_pop %>% 
+    arrange(desc(deaths_per_100k))
+
+states_max_totals_per_pop %>% 
+    arrange(desc(cases_per_100k))
+```
+
+```{r p2q2-sample}
+
+# Your transformed data should look similar to the following tibble:
+#
+# A tibble: 51 x 4
+#     state                   date           deaths_per_100k  cases_per_100k
+#     <chr>                  <date>               <dbl>          <dbl>
+#  1 North Dakota          2021-12-31             265.           22482.
+#  2 Alaska                2021-12-31             130.           21310.
+#  3 Rhode Island          2021-12-31             280.           21093.
+#  4 South Dakota          2021-12-31             278.           20014.
+#  5 Wyoming               2021-12-31             264.           19979.
+#  6 Tennessee             2021-12-31             296.           19783.
+#  7 Kentucky              2021-12-31             269.           19173.
+#  8 Florida               2021-12-31             287.           19128.
+#  9 Utah                  2021-12-31             113.           19088.
+# 10 Wisconsin             2021-12-31             190.           19008.
+# ... with 41 more rows
+```
+
+-- Communicate your methodology, results, and interpretation here -- 
+
+Following up on my comments after the last question, when we account for differences in statewide populations, the ordering of states looks a bit different than in question 1. Half of the states in the top 10 when adjusting for population are at the smaller end of total state populations. One area of interest would be to see why states with smaller total populations are more heavily represented here and if it actually has anything to do with populations or if that's a coincidence.
+
+Florida is the only state in the top ten based on total deaths and cases that is also in the per population top 10. Florida is also the third most populous state based on the population estimates.
+
+The logic here is similar to the per population data earlier.
+
+I'm more interested in the per population numbers for this analysis, but I think total numbers not adjusted for population have a place when trying to determine areas that have higher quantities of deaths or cases so that we're prepared to send more resources to those areas, as one example.
+
+### Question 3
+
+Now, select a state and calculate the seven-day averages for new cases and deaths per 100,000 people. Once you have calculated the averages, create a visualization using ggplot2 to represent the data. 
+
+```{r p2q3-response}
+
+# Select a state and then filter by state and date range your data from Question 1. Calculate the seven-day average following the same procedure as Part 1. 
+
+state_per_pop <- states %>% 
+    # states is grouped by date, so we need to ungroup it so lag works below
+    ungroup() %>% 
+    filter(
+        state == "Florida",
+        date >= "2020-03-15"
+    ) %>% 
+    mutate(Year = year(date)) %>% 
+    inner_join(state_pops, by = c("state", "Year")) %>% 
+    mutate(
+        deaths_per_100k = total_deaths / state_pop * 100000,
+        cases_per_100k = round(total_cases / state_pop * 100000, 5),
+        
+        deaths_1_day = deaths_per_100k - lag(deaths_per_100k, order_by = date),
+        cases_1_day = cases_per_100k - lag(cases_per_100k, order_by = date),
+        deaths_7_day = signif((
+            deaths_1_day +
+                lag(deaths_1_day, 1, order_by = date) +
+                lag(deaths_1_day, 2, order_by = date) +
+                lag(deaths_1_day, 3, order_by = date) +
+                lag(deaths_1_day, 4, order_by = date) +
+                lag(deaths_1_day, 5, order_by = date) +
+                lag(deaths_1_day, 6, order_by = date)
+        ) / 7, 3),
+        cases_7_day = signif((
+            cases_1_day +
+                lag(cases_1_day, 1, order_by = date) +
+                lag(cases_1_day, 2, order_by = date) +
+                lag(cases_1_day, 3, order_by = date) +
+                lag(cases_1_day, 4, order_by = date) +
+                lag(cases_1_day, 5, order_by = date) +
+                lag(cases_1_day, 6, order_by = date)
+        ) / 7, 3)
+    ) %>%
+    select(
+        state,
+        date,
+        total_deaths,
+        total_cases,
+        population = state_pop,
+        deaths_per_100k,
+        cases_per_100k,
+        deaths_7_day,
+        cases_7_day
+    ) %>%
+    arrange(date)
+
+state_per_pop
+
+state_per_pop %>%
+    ggplot(aes(x = cases_7_day, y = deaths_7_day)) +
+    geom_point() +
+    geom_vline(
+        xintercept = 0,
+        linetype = "dashed",
+        color = "blue"
+    ) +
+    geom_smooth(
+        color = "purple",
+        se = FALSE
+    ) +
+    
+    coord_cartesian(
+        expand = FALSE,
+        xlim = c(-25, NA)
+    ) +
+    labs(
+        title = "Seven-Day Averages Per 100,000 People for Deaths and Cases in Florida",
+        x = "Seven-Day New Cases Average",
+        y = "Seven-Day New Deaths Average"
+    ) +
+    theme_bw() +
+    theme(
+        plot.title = element_text(hjust = 0.5)
+    )
+```
+
+```{r p2q3-sample}
+
+# Your transformed data should look similar to the following tibble: 
+#
+# A tibble: 656 × 9
+#     state    date       total_deaths total_cases population deaths_per_100k cases_per_100k deaths_7_day  cases_7_day
+#     <chr>    <date>            <dbl>    <dbl>      <dbl>         <dbl>          <dbl>        <dbl>         <dbl>
+#  1 Colorado 2020-03-15            2      136      5784308        0.0346          2.35         NA            NA   
+#  2 Colorado 2020-03-16            2      161      5784308        0.0346          2.78         NA            NA   
+#  3 Colorado 2020-03-17            3      183      5784308        0.0519          3.16         NA            NA   
+#  4 Colorado 2020-03-18            3      216      5784308        0.0519          3.73         NA            NA   
+#  5 Colorado 2020-03-19            5      278      5784308        0.0864          4.81         NA            NA   
+#  6 Colorado 2020-03-20            5      364      5784308        0.0864          6.29         NA            NA   
+#  7 Colorado 2020-03-21            6      475      5784308        0.104           8.21         NA            NA   
+#  8 Colorado 2020-03-22            7      591      5784308        0.121           10.2       0.0123         1.12
+#  9 Colorado 2020-03-23           10      721      5784308        0.173           12.5       0.0198         1.38
+# 10 Colorado 2020-03-24           11      912      5784308        0.190           15.8       0.0198         1.80
+# … with 646 more rows
+```
+
+-- Communicate your methodology, results, and interpretation here -- 
+
+As noted in the last question, Florida is one of the more populous states in the US, it has one of the higher death and case counts among states, and it also shows up on the top ten list for deaths and cases when adjusting for population, so I wanted to look more closely at its data.
+
+The measures in the visualization here are the seven-day averages for deaths and cases per 100,000 people in Florida.
+
+I chose to compare these two measures in a scatterplot to see if there's a general trend. The data fails some of the conditions for running a linear regression on it. I haven't found a scale transformation that gets the spread of the data around a linear line to be consistent, so we shouldn't put a linear regression on top of this.
+
+Just on a surface note, I think the ball shape of this graph is pretty interesting to look at. I haven't run into this type of shape in scatterplots as often as other shapes.
+
+It does look like there's a general increasing trend between both measures up through about 75 or 80 cases per seven day average. It's hard to tell how much the higher deaths with lower cases should be factored in considering there's a tighter grouping of lower deaths for lower cases. 
+
+One interesting thing to note in the Florida data is that there is a span of a few days in June 2021 where the cumulative cases actually drop. When we average those, we get a negative seven-day average due to the subtraction I'm using with lag().
+
+Going back to the source county data and exploring there, it looks like this is in the source, but I may just be missing a mistake I made. I put a blue vertical bar at x=0 to highlight that the x-axis shows negative values to account for the drops in cumulative cases.
+
+### Question 4
+
+Using the same state, identify the top 5 counties in terms of deaths and cases per 100,000 people. 
+
+```{r p2q4-response}
+
+# Using the same state as Question 2, filter your state and date range from the combined data set from Part 1 and summarize cases and deaths. Produce two lists arranged by deaths and cases. When transforming the data, be sure to include the "fips" column as you will need this to complete Question 5. 
+
+fla_deaths_cases <- counties %>% 
+    filter(state == "Florida") %>% 
+    filter(date == "2021-12-31") %>% 
+    mutate(Year = year(date)) %>% 
+    inner_join(state_pops, by = c("state", "Year")) %>% 
+    mutate(
+        total_deaths = deaths / state_pop * 100000,
+        total_cases = cases / state_pop * 100000,
+    ) %>% 
+    select(
+        county,
+        date,
+        fips,
+        deaths,
+        cases,
+        total_deaths,
+        total_cases
+    )
+
+
+fla_deaths <- fla_deaths_cases %>% 
+    slice_max(n = 5, order_by = total_deaths) %>% 
+    arrange(desc(total_deaths))
+
+fla_cases <- fla_deaths_cases %>% 
+    slice_max(n = 5, order_by = total_cases) %>% 
+    arrange(desc(total_cases))
+
+fla_deaths
+fla_cases
+```
+
+```{r p2q4-sample}
+
+# Your transformed data should be similar to the following tibbles: 
+#
+# Arranged by deaths: 
+# A tibble: 64 × 4
+#     county       date       fips    total_deaths   total_cases
+#     <chr>       <date>      <chr>       <dbl>         <dbl>
+#  1 El Paso    2021-12-20    08041       1355         119772
+#  2 Denver     2021-12-20    08031       1065         106747
+#  3 Jefferson  2021-12-20    08059       1061         76732
+#  4 Adams      2021-12-20    08001       1057         90476
+#  5 Arapahoe   2021-12-20    08005       1046         95769
+#  6 Pueblo     2021-12-20    08101        643         30739
+#  7 Weld       2021-12-20    08123        569         55599
+#  8 Mesa       2021-12-20    08077        445         29542
+#  9 Larimer    2021-12-20    08069        393         47444
+# 10 Douglas    2021-12-20    08035        361         48740
+# … with 54 more rows
+#
+#
+# Arranged by cases: 
+# A tibble: 64 × 4
+#     county       date       fips   total_deaths   total_cases
+#     <chr>       <date>      <chr>     <dbl>         <dbl>
+#  1 El Paso    2021-12-20    08041     1355         119772
+#  2 Denver     2021-12-20    08031     1065         106747
+#  3 Arapahoe   2021-12-20    08005     1046          95769
+#  4 Adams      2021-12-20    08001     1057          90476
+#  5 Jefferson  2021-12-20    08059     1061          76732
+#  6 Weld       2021-12-20    08123      569          55599
+#  7 Douglas    2021-12-20    08035      361          48740
+#  8 Larimer    2021-12-20    08069      393          47444
+#  9 Boulder    2021-12-20    08013      323          36754
+# 10 Pueblo     2021-12-20    08101      643          30739
+# … with 54 more rows
+```
+
+-- Communicate your methodology, results, and interpretation here -- 
+
+Usually I try to match my output to the sample tibble in the code chunks to confirm my logic is right, but I wasn't able to recreate the sample output for this one. But I think the logic here is correct.
+
+The logic is similar to previous questions, but this time we filter down to the top five for each measure.
+
+For Florida, it's mostly the same counties in each list. It'd be interesting to look at other states and determine if the counties with the top deaths and cases typically are the same. If they aren't, then what's causing that difference?
+
+### Question 5
+
+Modify the code below for the map projection to plot county-level deaths and cases per 100,000 people for your state. 
+
+```{r p2q5-response}
+
+# Deaths
+plot_usmap(
+    regions = "county", 
+    include="FL", 
+    data = fla_deaths_cases,
+    values = "total_deaths", 
+    color = "blue"
+) +
+  scale_fill_continuous(
+      low = "white", 
+      high = "blue", 
+      name = "Deaths per 100,000"
+)
+
+# Cases
+plot_usmap(
+    regions = "county", 
+    include="FL", 
+    data = fla_deaths_cases,
+    values = "total_cases", 
+    color = "blue"
+) +
+  scale_fill_continuous(
+      low = "white", 
+      high = "blue", 
+      name = "Cases per 100,000"
+)
+
+```
+
+```{r p2q5-sample}
+# Copy and modify the code below for your state.
+#
+# plot_usmap arguments: 
+#   regions: can be one of ("states", "state", "counties", "county"). The default is "states"
+#   include: The regions to include in the resulting map. If regions is "states"/"state", the value can be either a state name, abbreviation or FIPS code. For counties, the FIPS must be provided as there can be multiple counties with the same name. 
+#   data: values to plot on the map
+#   values: the name of the column that contains the values to be associated with a given region. 
+#   color: the map outline color.
+#
+# Reference the plot_usmap documentation for further information using ?plot_usmap
+
+# plot_usmap(
+#     regions = "county", 
+#     include="CO", 
+#     data = colorado_county, 
+#     values = "total_deaths", 
+#     color = "blue"
+# ) +
+#   scale_fill_continuous(
+#       low = "white", 
+#       high = "blue", 
+#       name = "Deaths per 100,000"
+# )
+
+```
+
+-- Communicate your methodology, results, and interpretation here -- 
+
+It looks like both deaths and cases are focused in the southeast of the state. Deaths appear to have a bit more of a spread up through the state.
+
+Based on the maps and then looking back at the data from the previous question, Miami-Dade county is higher for both deaths and counts than the next counties on both lists. That may make the map look like there's less range of both measures throughout the state. Probably my next analysis would be to look at subsets of both measures starting by removing Miami-Dade county. It may be that the rest of the state has much more variety when we get rid of the high outlier.
+
+### Question 6
+
+Finally, select three other states and calculate the seven-day averages for new deaths and cases per 100,000 people for between March 15, 2020, and December 31, 2021. 
+
+
+```{r p2q6-response}
+
+four_states_by_county <- states %>% 
+    # states is grouped by date, so we need to ungroup it so lag works below
+    ungroup() %>% 
+    filter(
+        state %in% c(
+            "Florida", 
+            "Maine", 
+            "Washington", 
+            "California"
+        ),
+        date >= "2020-03-15"
+    ) %>% 
+    mutate(Year = year(date)) %>% 
+    inner_join(state_pops, by = c("state", "Year")) %>% 
+    # Need to group by state here so lag() compares within each state, not across states
+    group_by(state) %>% 
+    mutate(
+        deaths_per_100k = round(total_deaths / state_pop * 100000, 5),
+        cases_per_100k = round(total_cases / state_pop * 100000, 5),
+        
+        deaths_1_day = round(deaths_per_100k - lag(deaths_per_100k, order_by = date), 5),
+        cases_1_day = round(cases_per_100k - lag(cases_per_100k, order_by = date), 5),
+        deaths_7_day = round((
+            deaths_1_day +
+                lag(deaths_1_day, 1, order_by = date) +
+                lag(deaths_1_day, 2, order_by = date) +
+                lag(deaths_1_day, 3, order_by = date) +
+                lag(deaths_1_day, 4, order_by = date) +
+                lag(deaths_1_day, 5, order_by = date) +
+                lag(deaths_1_day, 6, order_by = date)
+        ) / 7, 5),
+        cases_7_day = round((
+            cases_1_day +
+                lag(cases_1_day, 1, order_by = date) +
+                lag(cases_1_day, 2, order_by = date) +
+                lag(cases_1_day, 3, order_by = date) +
+                lag(cases_1_day, 4, order_by = date) +
+                lag(cases_1_day, 5, order_by = date) +
+                lag(cases_1_day, 6, order_by = date)
+        ) / 7, 5)
+    ) %>%
+    # Undoing the state grouping to display individual dates
+    ungroup() %>% 
+    select(
+        state,
+        date,
+        total_deaths,
+        total_cases,
+        population = state_pop,
+        deaths_per_100k,
+        cases_per_100k,
+        deaths_7_day,
+        cases_7_day
+    ) %>%
+    arrange(
+        state,
+        date
+    )
+
+four_states_by_county
+```
+
+-- Communicate your methodology, results, and interpretation here -- 
+
+I'm looking at the four corners of the contiguous United States, assuming California counts as the southwest corner. I figure these four are the furthest apart, so it'd be interesting to see if trends are similar or different between them.
+
+I'm mostly reusing logic from earlier to calculate these measures. One extra piece is that we need to group by state so the lag() calls only compare numbers within a given state. After that, we ungroup to get back to one row per state per day.
+
+With so much data here, I'm going to hold off until the vis in the next question to try and find relationships and trends visually.
+
+### Question 7
+
+Create a visualization comparing the seven-day averages for new deaths and cases per 100,000 people for the four states you selected. 
+
+```{r p2q7-response}
+four_states_vis <- four_states_by_county %>% 
+    group_by(date) %>% 
+    mutate(
+        daily_mean_deaths = mean(deaths_7_day),
+        daily_mean_cases = mean(cases_7_day)
+    ) %>% 
+    ungroup()
+
+# Deaths
+four_states_vis %>% 
+    
+    ggplot(aes(x = date)) +
+    
+    geom_smooth(
+        aes(
+            y = deaths_7_day, 
+            color = state
+        ), 
+        se = FALSE
+    ) +
+    geom_smooth(
+        aes(y = daily_mean_deaths), 
+        method = "lm",
+        se = FALSE,
+        color = "black",
+        linetype = "dashed"
+    ) +
+    
+    scale_x_date(
+        date_breaks = "4 months",
+        date_labels = "%b %Y"
+    ) +
+
+    scale_y_continuous(labels = scales::number) +
+    coord_cartesian(expand = FALSE) +
+    labs(
+        title = "Seven-Day Averages Per 100,000 People",
+        subtitle = "[black dashed line is linear model for daily mean across all four states for seven-day averages]",
+        x = NA,
+        y = "Seven-Day New Deaths Average"
+    ) +
+    
+    theme_bw() +
+    theme(
+        plot.title = element_text(hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.3),
+        legend.title = element_blank(),
+        axis.title.x = element_blank()
+    )
+
+# Cases
+four_states_vis %>% 
+    
+    ggplot(aes(x = date)) +
+    
+    geom_smooth(
+        aes(
+            y = cases_7_day, 
+            color = state
+        ), 
+        se = FALSE
+    ) +
+    geom_smooth(
+        aes(y = daily_mean_cases), 
+        method = "lm",
+        se = FALSE,
+        color = "black",
+        linetype = "dashed"
+    ) +
+    
+    scale_x_date(
+        date_breaks = "4 months",
+        date_labels = "%b %Y"
+    ) +
+
+    scale_y_continuous(labels = scales::number) +
+    coord_cartesian(expand = FALSE) +
+    labs(
+        title = "Seven-Day Averages Per 100,000 People",
+        subtitle = "[black dashed line is linear model for daily mean across all four states for seven-day averages]",
+        x = NA,
+        y = "Seven-Day New Cases Average"
+    ) +
+    
+    theme_bw() +
+    theme(
+        plot.title = element_text(hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.3),
+        legend.title = element_blank(),
+        axis.title.x = element_blank()
+    )
+```
+
+-- Communicate your methodology, results, and interpretation here -- 
+
+The core of each graph is putting a line chart for each state's seven-day averages. On top of that, I found the mean across all four states for deaths and cases for each day, and then I ran a linear model on those daily means to get a general sense of how the mean of the combined deaths and cases is changing over time. I wanted some sort of anchor point to reference outside of each state's individual lines.
+
+One interesting thing we see in these graphs is that Florida looks to be above the model line much more than the other states. California peaks higher above the model line, but it also dips back down below it. That maybe hints that Florida had poorer overall death and case averages compared to the other states.
+
+Deaths also appear to have a wider variance around the model line, but the scale for deaths has a much smaller range than that for cases, so it'd take more work to see if that visual trend is significant or not between the two measures. One theme of this whole analysis is how to handle the scale problem between deaths and cases in such a way that we can start to say something between them.
+
+## Part 3 - Global Comparison
+
+```{r import-csse}
+# Import global COVID-19 statistics aggregated by the Center for Systems Science and Engineering (CSSE) at Johns Hopkins University. 
+# Import global population estimates from the World Bank.
+
+csse_global_deaths <- read_csv(
+    paste0("https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/",
+           "csse_covid_19_data/csse_covid_19_time_series/",
+           "time_series_covid19_deaths_global.csv"))
+csse_global_cases <- read_csv(
+    paste0("https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/",
+           "csse_covid_19_data/csse_covid_19_time_series/",
+           "time_series_covid19_confirmed_global.csv"))
+csse_us_deaths <- read_csv(
+    paste0("https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/",
+           "csse_covid_19_data/csse_covid_19_time_series/",
+           "time_series_covid19_deaths_US.csv"))
+csse_us_cases <- read_csv(
+    paste0("https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/",
+           "csse_covid_19_data/csse_covid_19_time_series/",
+           "time_series_covid19_confirmed_US.csv"))
+
+global_population_estimates <- read_csv("global_population_estimates.csv")
+
+# Copying code from part one to trim the final part 3 Rmd
+us_counties_2020 <- read_csv(
+    "https://raw.githubusercontent.com/nytimes/covid-19-data/master/us-counties-2020.csv")
+us_counties_2021 <- read_csv(
+    "https://raw.githubusercontent.com/nytimes/covid-19-data/master/us-counties-2021.csv")
+us_counties_2022 <- read_csv(
+    "https://raw.githubusercontent.com/nytimes/covid-19-data/master/us-counties-2022.csv")
+
+counties <- bind_rows(us_counties_2020, us_counties_2021, us_counties_2022)
+counties$fips <- parse_number(counties$fips)
+counties <- counties %>% filter(state != "Puerto Rico")
+```
+
+### Question 1
+
+Using the state you selected in Part 2 Question 2 compare the daily number of cases and deaths reported from the CSSE and NY Times. 
+
+```{r p3q1-response}
+
+# To compare your state data between the two data sets, you will first need to tidy the US CSSE death and cases data.
+# Hint: Review the documentation for pivot_longer().
+
+us_deaths <- csse_us_deaths %>% 
+    select(
+        -c(
+            UID,
+            iso2,
+            iso3,
+            code3,
+            Country_Region,
+            Lat,
+            Long_,
+            Combined_Key
+        ),
+        county = Admin2,
+        
+    ) %>% 
+    pivot_longer(
+        "1/22/20":last_col(),
+        names_to = "date",
+        values_to = "total_deaths"
+    ) %>% 
+    mutate(
+        date = parse_date(
+            date,
+            format = "%m/%d/%y"
+        )    
+    )
+
+us_cases <- csse_us_cases %>% 
+    select(
+        -c(
+            UID,
+            iso2,
+            iso3,
+            code3,
+            Country_Region,
+            Lat,
+            Long_,
+            Combined_Key
+        ),
+        county = Admin2,
+        
+    ) %>% 
+    pivot_longer(
+        "1/22/20":last_col(),
+        names_to = "date",
+        values_to = "total_cases"
+    ) %>% 
+    mutate(
+        date = parse_date(
+            date,
+            format = "%m/%d/%y"
+        )    
+    )
+
+# Once you have tidied your data, join the two CSSE US data sets to include cases and deaths in one table. 
+
+us_deaths_cases <- us_deaths %>% 
+    inner_join(us_cases, by = c("FIPS", "date")) %>% 
+    filter(date >= "2020-03-15") %>% 
+    select(
+        fips = FIPS,
+        county = county.x,
+        state = Province_State.x,
+        date,
+        total_cases,
+        total_deaths
+    )
+
+csse_fla_deaths_cases <- us_deaths_cases %>% 
+    filter(state == "Florida")
+
+# Finally, create two visualizations with one plotting the CSSE and NY Times cases and the other plotting the CSEE and NY Times deaths.
+
+csse_nyt_fla_compare <- csse_fla_deaths_cases %>% 
+    inner_join(counties, by = c("fips", "date")) %>% 
+    select(
+        fips,
+        county = county.x,
+        state = state.x,
+        date,
+        csse_deaths = total_deaths,
+        csse_cases = total_cases,
+        nyt_deaths = deaths,
+        nyt_cases = cases
+    )
+
+vis_compare <- csse_nyt_fla_compare %>% 
+    group_by(date) %>% 
+    summarize(
+        csse_deaths = sum(csse_deaths),
+        csse_cases = sum(csse_cases),
+        nyt_deaths = sum(nyt_deaths),
+        nyt_cases = sum(nyt_cases)
+    ) %>% 
+    mutate(
+        csse_deaths_1_day = csse_deaths - lag(csse_deaths, order_by = date),
+        csse_cases_1_day = csse_cases - lag(csse_cases, order_by = date),
+        nyt_deaths_1_day = nyt_deaths - lag(nyt_deaths, order_by = date),
+        nyt_cases_1_day = nyt_cases - lag(nyt_cases, order_by = date),
+        
+        diff_daily_deaths = csse_deaths_1_day - nyt_deaths_1_day,
+        diff_daily_cases = csse_cases_1_day - nyt_cases_1_day
+    ) %>% 
+    select(
+        date,
+        # csse_deaths,
+        # csse_cases,
+        # csse_deaths_1_day,
+        # csse_cases_1_day,
+        # nyt_deaths,
+        # nyt_cases,
+        # nyt_deaths_1_day,
+        # nyt_cases_1_day,
+        diff_daily_deaths,
+        diff_daily_cases
+    ) %>% 
+    arrange(date)
+
+# Deaths
+vis_compare %>% 
+    filter(diff_daily_deaths != 0) %>% 
+    
+    ggplot(aes(x = date)) +
+    geom_point(aes(y = diff_daily_deaths), color = "orange") +
+
+    scale_x_date(
+        date_breaks = "6 months",
+        date_labels = "%b %Y",
+        limits = c(as_date("2020-03-15"), as_date("2022-12-31"))
+    ) +
+
+    scale_y_continuous(
+        labels = scales::number,
+        limits = c(-2000, 2000)
+    ) +
+    coord_cartesian(expand = FALSE) +
+    labs(
+        title = "Difference Between CSSE and NYT Non-Zero New Daily Deaths",
+        x = NA,
+        y = "CSSE Minus NYT New Daily Deaths"
+    ) +
+
+    theme_bw() +
+    theme(
+        plot.title = element_text(hjust = 0.5),
+        axis.title.x = element_blank()
+    )
+
+# Cases
+vis_compare %>% 
+    filter(diff_daily_cases != 0) %>% 
+    
+    ggplot(aes(x = date)) +
+    geom_point(aes(y = diff_daily_cases), color = "purple") +
+
+    scale_x_date(
+        date_breaks = "6 months",
+        date_labels = "%b %Y",
+        limits = c(as_date("2020-03-15"), as_date("2022-12-31"))
+    ) +
+
+    scale_y_continuous(
+        labels = scales::number,
+        limits = c(-4000, 4000)
+    ) +
+    coord_cartesian(expand = FALSE) +
+    labs(
+        title = "Difference Between CSSE and NYT Non-Zero New Daily Cases",
+        x = NA,
+        y = "CSSE Minus NYT New Daily Cases"
+    ) +
+
+    theme_bw() +
+    theme(
+        plot.title = element_text(hjust = 0.5),
+        axis.title.x = element_blank()
+    )
+```
+
+```{r p3q1-sample}
+
+# Your tidied CSSE data for your selected state should look similar to the 
+# following tibble:
+#
+# A tibble: 43,362 × 6
+#     fips  county  state        date      cases  deaths
+#     <dbl> <chr>   <chr>       <date>     <dbl>  <dbl>
+#  1  8001  Adams  Colorado   2020-03-15     6      0
+#  2  8001  Adams  Colorado   2020-03-16     8      0
+#  3  8001  Adams  Colorado   2020-03-17    10      0
+#  4  8001  Adams  Colorado   2020-03-18    10      0
+#  5  8001  Adams  Colorado   2020-03-19    10      0
+#  6  8001  Adams  Colorado   2020-03-20    12      0
+#  7  8001  Adams  Colorado   2020-03-21    14      0
+#  8  8001  Adams  Colorado   2020-03-22    18      0
+#  9  8001  Adams  Colorado   2020-03-23    25      0
+# 10  8001  Adams  Colorado   2020-03-24    27      0
+# … with 43,352 more rows
+
+```
+
+```{r p3q1-extra-vis}
+
+vis_compare %>% 
+    mutate(
+        agree_on_deaths = ifelse(diff_daily_deaths == 0, 1, 0),
+        agree_on_cases = ifelse(diff_daily_cases == 0, 1, 0),
+        total = n()
+    ) %>% 
+    select(
+        -c(
+            diff_daily_deaths,
+            diff_daily_cases
+        )
+    ) %>% 
+    pivot_longer(
+        cols = c("agree_on_deaths", "agree_on_cases"),
+        names_to = "agree",
+        values_to = "Y/N"
+    ) %>%
+    filter(!is.na(`Y/N`)) %>% 
+    group_by(
+        agree
+    ) %>% 
+    summarize(
+        yeps = sum(`Y/N`),
+        nopes = total-yeps,
+        total = total,
+        percent_agree = scales::percent(yeps/total),
+        percent_disagree = scales::percent(nopes/total)
+    ) %>% 
+    unique() %>% 
+    kable(align = "lrrrrr")
+```
+
+-- Communicate your methodology, results, and interpretation here -- 
+
+There is a lot of preprocessing in this code chunk. I'm starting from pretty raw data and building it up from scratch. The general approach is to get the CSSE data combined and pulled out for Florida, then to join it to the NYT data, and then to calculate the difference in new daily deaths and cases reported by each source. I left some commented lines at the end of the preprocessing to show some of the intermediate columns used to calculate the differences between the datasets.
+
+When we get to the visualizations, I filter out the days where CSSE and NYT agree on the new daily deaths and cases. I want to take a look at where they disagree and by how much. For deaths, there isn't much disagreement until we start getting into late 2021. At that point, the spread of disagreement is higher than in earlier dates.
+
+For cases, most of the disagreement comes at the beginning dates.
+
+I do want to call out that we'd need to use a different type of visualization to compare between dates with agreement and dates with differences. Overall, the two datasets agree much more than they disagree, so the two charts here can be misleading since they only show the huge amount of agreement with an absence of dots.
+
+The table after the visualizations shows a quick relative breakdown between agreement and disagreement.
+
+Also, I limited the y-axis range to see some of the spread closer to zero. This pushed some outliers beyond the edges of the graph.
+
+The most surprising piece here is how much spread we get in differences in new daily deaths after September 2021. I expected the points to hover relatively close to zero for most dates on both graphs. That said, a few hundred cases may be a reasonable difference in general when looking at the magnitude of totals we have.
+
+### Question 2 
+
+Now that you have verified the data reported from the CSSE and NY Times are similar, combine the global and US CSSE data sets and identify the top 10 countries in terms of deaths and cases per 100,000 people between March 15, 2020, and December 31, 2021.
+
+```{r p3q2-response}
+
+# First, combine and tidy the CSSE death and cases data sets. You may wish to keep the two sets separate.
+
+global_deaths <- csse_global_deaths %>% 
+    select(
+        -c(
+            Lat,
+            Long
+        )
+    ) %>% 
+    pivot_longer(
+        cols = `1/22/20`:`3/9/23`,
+        names_to = "date",
+        values_to = "deaths"
+    ) %>% 
+    mutate(
+        date = parse_date(
+            date,
+            format = "%m/%d/%y"
+        ),
+    ) %>% 
+    rename(country = `Country/Region`) %>% 
+    group_by(
+        country,
+        date
+    ) %>% 
+    summarize(
+        deaths = sum(deaths),
+        .groups = "keep"
+    )
+
+global_cases <- csse_global_cases %>% 
+    select(
+        -c(
+            Lat,
+            Long
+        )
+    ) %>% 
+    pivot_longer(
+        cols = `1/22/20`:`3/9/23`,
+        names_to = "date",
+        values_to = "cases"
+    ) %>% 
+    mutate(
+        date = parse_date(
+            date,
+            format = "%m/%d/%y"
+        ),
+    ) %>% 
+    rename(country = `Country/Region`) %>% 
+    group_by(
+        country,
+        date
+    ) %>% 
+    summarize(
+        cases = sum(cases),
+        .groups = "keep"
+    )
+
+global_deaths_cases <- global_cases %>% 
+    full_join(global_deaths, by = c("country", "date")) %>% 
+    filter(
+        date >= "2020-03-15" & date <= "2021-12-31"
+    ) %>%
+    ungroup() %>%
+    arrange(
+        country,
+        date
+    )
+
+# Then, tidy the global population estimates. While tidying your data, remember to include columns that you will be able to use when joining the COVID-19 data. 
+
+global_population <- global_population_estimates %>% 
+    pivot_longer(
+        cols = c("2020 [YR2020]", "2021 [YR2021]"),
+        names_to = "year",
+        values_to = "population"
+    ) %>% 
+    select(
+        country = `Country Name`,
+        year,
+        population
+    ) %>% 
+    mutate(
+        year = parse_double(substring(year, 0, 4)),
+        population = parse_double(population)
+    )
+
+# You will notice that the population estimates data does not include every country reported in the CSSE data. When calculating statistics per 100,000 people, you will need to filter the CSSE data to only include countries that you have population estimates for. 
+
+global_deaths_cases_per_people <- global_deaths_cases %>%
+    filter(date == "2021-12-31") %>% 
+    mutate(year = year(date)) %>% 
+    inner_join(global_population, by = c("country", "year")) %>% 
+    filter(population > 0) %>% 
+    mutate(
+        deaths_per_100k = round(deaths / population * 100000, 5),
+        cases_per_100k = round(cases / population * 100000, 5)
+    )
+
+global_deaths_cases_per_people %>% 
+    slice_max(n = 10, order_by = deaths_per_100k) %>% 
+    kable(align = "llrrrrr")
+
+global_deaths_cases_per_people %>% 
+    slice_max(n = 10, order_by = cases_per_100k) %>% 
+    kable(align = "llrrrrr")
+
+```
+
+-- Communicate your methodology, results, and interpretation here -- 
+
+Similar to the last prompt, there is a lot of preprocessing here. The code mainly unpivots on date to get one row per date for deaths and cases, joins those together, and then adds population data in before calculating those measures per 100,000 people. The inner join (instead of outer join) to the population data makes sure we have population numbers for the countries remaining in the analysis.
+
+What immediately hits me about the two top-ten lists is that the countries on them are smaller based on overall population. Some are actually super small, even under 100,000 total people. It also looks like a number of these countries are in or right near Europe.
+
+I'd be interested to read and find out if the higher rates of deaths and cases are indicative of something else. It may turn out there's a deeper cause, but it may also be something more neutral such as every country that is hit by COVID ends up with some sort of a minimum amount of deaths and cases while initially tackling the virus, and those minimum numbers look larger compared to smaller overall populations. Just one possible idea that came to mind.
+
+### Question 3
+
+Construct a visualization plotting the 10 countries in terms of deaths and cases per 100,000 people between March 15, 2020, and December 31, 2021. In designing your visualization keep the number of data you will be plotting in mind. You may wish to create two separate visualizations, one for deaths and another for cases. 
+
+```{r p3q3-response}
+
+# Deaths
+global_deaths_cases_per_people %>% 
+    slice_max(n = 10, order_by = deaths_per_100k) %>%
+    mutate(deaths_per_100k = round(deaths_per_100k)) %>% 
+    
+    ggplot(aes(x = reorder(country, -deaths_per_100k), y = deaths_per_100k)) +
+    geom_bar(stat = "identity", color = "blue", fill = "blue") +
+    geom_text(aes(label = deaths_per_100k), vjust = -1) +
+
+    coord_cartesian(expand = FALSE) +
+    ylim(0, 700) +
+    labs(
+        title = "Top Ten Countries by Deaths Per 100,000 People",
+        x = NA,
+        y = "Deaths Per 100,000 People"
+    ) +
+
+    theme_bw() +
+    theme(
+        plot.title = element_text(hjust = 0.5),
+        axis.title.x = element_blank(),
+        axis.text.x = element_text(angle = 45, hjust = 1)
+    )
+
+# Cases
+global_deaths_cases_per_people %>% 
+    slice_max(n = 10, order_by = cases_per_100k) %>%
+    mutate(cases_per_100k = round(cases_per_100k)) %>% 
+    
+    ggplot(aes(x = reorder(country, -cases_per_100k), y = cases_per_100k)) +
+    geom_bar(stat = "identity", color = "purple", fill = "purple") +
+    geom_text(aes(label = cases_per_100k), vjust = -1) +
+
+    coord_cartesian(expand = FALSE) +
+    ylim(0, 35000) +
+    labs(
+        title = "Top Ten Countries by Cases Per 100,000 People",
+        x = NA,
+        y = "Cases Per 100,000 People"
+    ) +
+
+    theme_bw() +
+    theme(
+        plot.title = element_text(hjust = 0.5),
+        axis.title.x = element_blank(),
+        axis.text.x = element_text(angle = 45, hjust = 1)
+    )
+
+```
+
+-- Communicate your methodology, results, and interpretation here -- 
+
+Going with a simple bar chart for these to focus on the computed measures directly instead of looking at another aspect of the data for these countries. The setup is pretty straightforward. We take the output from the previous question, grab the top tens, round the numbers, and then plot them in descending order by measure values.
+
+I don't have any extra insights here on top of what I put in the last question. I think bar charts do a good job of visualizing this type of ranking data and is a good starting point for further analysis.
+
+In terms of follow-up visualizations, I'd want to incorporate the continent these countries come from, I'd like to find a way also to visualize total populations for each of these countries to start getting a sense if my hypothesis in the last question might be worth pursuing, and I'd like to start looking at how trends might change if we broaden out into top twenty or thirty or so.
+
+### Question 4
+
+Finally, select four countries from one continent and create visualizations for the daily number of confirmed cases per 100,000 and the daily number of deaths per 100,000 people between March 15, 2020, and December 31, 2021. 
+
+```{r p3q4-response}
+
+vis_country <- global_deaths_cases %>% 
+    filter(country %in% c("Thailand", "Cambodia", "Vietnam", "Burma")) %>% 
+    mutate(
+        year = year(date),
+        join_country = ifelse(country == "Burma", "Myanmar", country)
+    ) %>%
+    inner_join(global_population, by = c("join_country" = "country", "year")) %>% 
+    group_by(country) %>%
+    mutate(
+        deaths_per_100k = round(deaths / population * 100000, 5),
+        cases_per_100k = round(cases / population * 100000, 5),
+        
+        deaths_1_day = round(deaths_per_100k - lag(deaths_per_100k, order_by = date), 5),
+        cases_1_day = round(cases_per_100k - lag(cases_per_100k, order_by = date), 5)
+    ) %>% 
+    # Undoing the country grouping to show individual dates
+    ungroup() %>% 
+    select(
+        country,
+        date,
+        deaths,
+        cases,
+        population,
+        deaths_per_100k,
+        cases_per_100k,
+        deaths_1_day,
+        cases_1_day
+    ) %>%
+    arrange(
+        country,
+        date
+    )
+
+# Deaths
+vis_country %>% 
+    filter(deaths_1_day != 0) %>% 
+    
+    ggplot(aes(x = date)) +
+    geom_point(aes(y = deaths_1_day, color = country)) +
+
+    scale_x_date(
+        date_breaks = "6 months",
+        date_labels = "%b %Y"
+    ) +
+
+    scale_y_continuous(
+        labels = scales::number
+    ) +
+    coord_cartesian(expand = FALSE) +
+    labs(
+        title = "Non-Zero New Daily Deaths",
+        x = NA,
+        y = "New Daily Deaths"
+    ) +
+
+    theme_bw() +
+    theme(
+        plot.title = element_text(hjust = 0.5),
+        axis.title.x = element_blank(),
+        legend.title = element_blank()
+    )
+
+# Cases
+vis_country %>% 
+    filter(cases_1_day != 0) %>% 
+    
+    ggplot(aes(x = date)) +
+    geom_point(aes(y = cases_1_day, color = country)) +
+
+    scale_x_date(
+        date_breaks = "6 months",
+        date_labels = "%b %Y"
+    ) +
+
+    scale_y_continuous(
+        labels = scales::number
+    ) +
+    coord_cartesian(expand = FALSE) +
+    labs(
+        title = "Non-Zero New Daily Cases",
+        x = NA,
+        y = "New Daily Cases"
+    ) +
+
+    theme_bw() +
+    theme(
+        plot.title = element_text(hjust = 0.5),
+        axis.title.x = element_blank(),
+        legend.title = element_blank()
+    )
+
+```
+
+-- Communicate your methodology, results, and interpretation here -- 
+
+I picked four countries that are huddled closely together in southern mainland Asia. I haven't spent much time looking at the COVID data from any of these four countries. I was curious if their numbers would be similar per population. I originally included Laos in place of Burma, but we don't have population data for Laos.
+
+I also want to call out that I'm using Burma for the name here. I know there's more to using Burma vs Myanmar, but I'm going with Burma.
+
+The two source datasets also have Burma in one and Myanmar in the other, so I created a custom column to facilitate the join.
+
+I'm going with a dot plot showing any deaths or cases per 100,000 people above zero. When we keep zero in, it can drown out some of the other data.
+
+For visual trends, we can see that all four countries follow the same general high-level trend in that deaths and cases spike later in 2021. Cambodia has the smallest of the four spikes.
+
+We can also see that Burma has a spike in both measures in later 2020 as well.
+
+Similar to some of my thoughts above, I'd like to compare overall population between these countries to see how that factors in in case there's a base level of deaths and cases that happen with COVID regardless of population, so that would make countries with smaller overall populations have higher rates during those periods.
+
+I also would like to read up on events happening in the countries around the spikes. I know Burma had some international political news going on during the pandemic, so that may factor in to that initial spike.
